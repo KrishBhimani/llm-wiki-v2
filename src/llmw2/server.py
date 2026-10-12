@@ -3,7 +3,9 @@
 
 """HTTP API (extra `server`) and the local web UI at GET /.
 
-POST /ingest, POST /upload (a .txt/.md/.pdf file), POST /ask, POST /folder (one made by hand), GET /tree, GET /note,
+POST /ingest, POST /upload (a .txt/.md/.pdf file), POST /ask, POST /folder (one made by hand), POST /note/move, POST /folder/describe,
+POST /audit (CROW: notes the classifier would file elsewhere), GET /taxonomy (new subfolders and fallbacks, from the log),
+GET /tree, GET /note,
 GET /graph, GET /usage, GET /check, GET /health; DELETE /note, DELETE /folder and
 DELETE /wiki (empty it); GET /settings, POST /settings,
 POST /settings/test and POST /settings/models when the app is given the settings file.
@@ -33,13 +35,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
 from llmw2 import __version__
+from llmw2.audit import AUDIT_MIN, HEALTH_MAX_SHARE, HEALTH_MIN_FILED
 from llmw2.bundle.files import SUFFIXES
 from llmw2.bundle.origin import Origin
 from llmw2.bundle.tree import graph
 from llmw2.config import WikiConfig
 from llmw2.errors import ConfigError, InputError, ModelError
 from llmw2.models.classifier import probe as probe_classifier
-from llmw2.models.llm import live_models, probe
+from llmw2.models.llm import context_warning, live_models, probe
 from llmw2.settings import Settings
 from llmw2.wiki import Wiki
 
@@ -75,6 +78,21 @@ class FolderRequest(BaseModel):
     description: str
 
 
+class MoveRequest(BaseModel):
+    path: str
+    folder: str
+
+
+class DescribeRequest(BaseModel):
+    path: str
+    description: str
+
+
+class AuditRequest(BaseModel):
+    min_confidence: float = AUDIT_MIN
+    apply: bool = False
+
+
 class SettingsChanges(BaseModel):
     """The fields of `settings.FIELDS` the page may send; unset ones are left alone, "" resets one (keeps a secret)."""
 
@@ -100,12 +118,19 @@ class SettingsChanges(BaseModel):
     crow_tau_fold: str | None = None
     crow_tau_ret: str | None = None
     crow_tau_link: str | None = None
+    crow_votes: str | None = None
+    crow_vote_band: str | None = None
+    crow_fallback_menu: str | None = None  # "visited" or "tree"
     crow_beam: str | None = None
     crow_retrieval_beam: str | None = None
     crow_k: str | None = None
     # How each model is called (a number as text, "" for the default)
     temperature: str | None = None
+    seed: str | None = None
+    pin_provider: str | None = None  # comma-separated; OpenRouter only
     timeout: str | None = None
+    read_chars: str | None = None  # characters one prompt may hold; "" for the provider's
+    note_chars: str | None = None  # about how long a note may be; "" for automatic
     classifier_timeout: str | None = None
     classifier_attempts: str | None = None
     classifier_state_chars: str | None = None
@@ -252,6 +277,47 @@ def create_app(
             except FileNotFoundError as e:
                 raise HTTPException(404, f"no note at {path}") from e
 
+    @app.post("/note/move")
+    def move_note(req: MoveRequest) -> dict[str, Any]:
+        with write_lock:
+            wiki = current()
+            try:
+                wiki.store.read(req.path)
+            except FileNotFoundError as e:
+                raise HTTPException(404, f"no note at {req.path}") from e
+            except InputError as e:
+                raise HTTPException(400, str(e)) from e
+            if wiki.tree().find(req.folder) is None:
+                raise HTTPException(404, f"no folder at {req.folder}")
+            try:
+                moved = wiki.move_note(req.path, req.folder)
+            except InputError as e:
+                raise HTTPException(400, str(e)) from e
+        return note(moved.rel)
+
+    @app.post("/audit")
+    def audit(req: AuditRequest | None = None) -> list[dict[str, Any]]:
+        req = req or AuditRequest()
+        if not req.apply:
+            return [p.to_dict() for p in current().audit_routes(req.min_confidence)]
+        with write_lock:
+            return [p.to_dict() for p in current().audit_routes(req.min_confidence, apply=True)]
+
+    @app.get("/taxonomy")
+    def taxonomy(min_filed: int = HEALTH_MIN_FILED, max_share: float = HEALTH_MAX_SHARE) -> list[dict[str, Any]]:
+        return [r.to_dict() for r in current().taxonomy_health(min_filed, max_share)]
+
+    @app.post("/folder/describe")
+    def describe_folder(req: DescribeRequest) -> dict[str, Any]:
+        with write_lock:
+            try:
+                folder = current().describe_folder(req.path, req.description)
+            except InputError as e:
+                if current().tree().find(req.path) is None:
+                    raise HTTPException(404, f"no folder at {req.path}") from e
+                raise
+        return {"path": folder.label, "description": folder.description}
+
     @app.post("/folder")
     def create_folder(req: FolderRequest) -> dict[str, Any]:
         with write_lock:
@@ -322,6 +388,8 @@ def create_app(
                 result: dict[str, Any] = {"ok": True, "model": cfg.llm.model, "reply": probe(trial.llm)}
             except ModelError as e:
                 result = {"ok": False, "model": cfg.llm.model, "error": str(e)}
+            if warning := context_warning(cfg):
+                result["warning"] = warning
             if trial.classifier is not None:
                 try:
                     probe_classifier(trial.classifier)

@@ -68,6 +68,12 @@ class Note:
         return str(self.frontmatter.get("title") or self.slug)
 
     @property
+    def id(self) -> str | None:
+        """The stable id a note gets when it is created (never in a link); None for a note written before ids."""
+        value = self.frontmatter.get("id")
+        return str(value) if value else None
+
+    @property
     def summary(self) -> str:
         return str(self.frontmatter.get("description") or "")
 
@@ -184,6 +190,37 @@ def drop_links(body: str, from_rel: str, gone: Callable[[str], bool]) -> str:
     main, entries = split_see_also(body)
     kept = [e for e in entries if not ((m := _ENTRY.match(e.strip())) and dead(m["link"]))]
     text = _LINK.sub(lambda m: m["text"] if dead(m["link"]) else m[0], main)
+    return body if kept == entries and text == main else join_see_also(text, kept)
+
+
+def rewrite_links(body: str, from_rel: str, to_rel: str, remap: Callable[[str], str]) -> str:
+    """`body` of the document at `from_rel`, which will live at `to_rel`, with its links kept pointing where they did.
+
+    A link to a path that `remap` changes follows it; every relative link is rewritten from the new directory.
+    See-also entries and inline links alike; anchors stay. Off-bundle links and anchors alone are left as they are.
+    """
+
+    def fix(link: str) -> str:
+        target = link_target(from_rel, link)
+        if target is None or target.startswith(".."):
+            return link
+        new = remap(target)
+        if new == target and note_dir(from_rel) == note_dir(to_rel):
+            return link
+        path, sep, anchor = link.partition("#")
+        return ("/" + new if path.startswith("/") else rel_link(note_dir(to_rel), new)) + sep + anchor
+
+    main, entries = split_see_also(body)
+
+    def fix_entry(entry: str) -> str:
+        m = _ENTRY.match(entry.strip())
+        if not m:
+            return entry
+        line, link = entry.strip(), fix(m["link"])
+        return entry if link == m["link"] else line[: m.start("link")] + link + line[m.end("link") :]
+
+    kept = [fix_entry(e) for e in entries]
+    text = _LINK.sub(lambda m: m[0][: m.start("link") - m.start()] + fix(m["link"]) + ")", main)
     return body if kept == entries and text == main else join_see_also(text, kept)
 
 

@@ -19,11 +19,11 @@ under `src/llmw2/agents/prompts/`.
 
 | Step | Classic decider | CROW decider | Primitive | Threshold | Fallback |
 |---|---|---|---|---|---|
-| 0 summarize | LLM `librarian/summarize` | same LLM step. `OKF_SUMMARIZE=false` files the source verbatim. | - | - | - |
-| 1 route | LLM `librarian/route`, one level at a time | `classifier/route` at each level. Options are the subfolders, `Here` (not at the root, which holds no notes: in an empty wiki `New subfolder` is the one way and nothing is asked), `New subfolder` (below `OKF_MAX_DEPTH`) and `None of these` (not at the root). A path's score is the geometric mean of its edge probabilities. | Choice | `tau_route`, `beam`, `tau_path` | LLM `librarian/route_fallback` over the folders visited, when no path finishes or the best score is below `tau_path`. On error, LLM `librarian/route`. An LLM that picks the root opens a new folder there instead. It may name a folder the classifier did not visit; a path that does not exist yet (`/finance/pricing` with no `pricing`) opens a new subfolder in the deepest folder of it that does. |
+| 0 summarize | LLM `librarian/summarize`. A source longer than one call (`OKF_LLM_READ_CHARS` less 6000 characters for the prompt) is read in parts: `librarian/summarize_part` takes notes on each block of it, in turn, and `librarian/summarize_combine` writes the note from them. | same LLM step. `OKF_SUMMARIZE=false` files the source verbatim. | - | - | - |
+| 1 route | LLM `librarian/route`, one level at a time | `classifier/route` at each level. Options are the subfolders, `Here` (not at the root, which holds no notes: in an empty wiki `New subfolder` is the one way and nothing is asked), `New subfolder` (below `OKF_MAX_DEPTH`) and `None of these` (not at the root). A path's score is the geometric mean of its edge probabilities. With `votes` above 1, a level whose confidence is within `vote_band` of `tau_route`, or whose top two options are closer than that, is asked `votes` times and the averaged answer decides; if the best path then scores within `vote_band` of `tau_path`, the beam runs once more with every level averaged. With `strict_new_folders` (the default) a `New subfolder` under `tau_route` cannot end a path: its probability goes to `Here` (at the root the other options are renormalised) and the adjusted probabilities rank the options, score the edge and, with the answer's confidence, decide how many are kept; `Here` and `New subfolder` are asked as "the folder's description covers the note" and "neither the description nor a subfolder covers it". `strict_new_folders = false` (`OKF_STRICT_NEW_FOLDERS`) keeps 0.3.0's routing and its prompt, `classifier/route_open`. | Choice | `tau_route`, `beam`, `tau_path`, `votes`, `vote_band` | LLM `librarian/route_fallback`, when no path finishes or the best score is below `tau_path`. Its menu is the folders the classifier visited; with `fallback_menu` set to `tree` (an extension of the paper, as `relate` is) it also lists the other folders of the wiki, up to 8000 characters, the visited ones first. On error, LLM `librarian/route`. An LLM that picks the root opens a new folder there instead. It may name a folder the classifier did not visit; a path that does not exist yet (`/finance/pricing` with no `pricing`) opens a new subfolder in the deepest folder of it that does. |
 | 2 relevance | LLM `librarian/find_match` | `classifier/note_relevance`: one Noul per note in the candidate folders, batched. The best note wins if its probability is above `tau_ing`. | Noul | `tau_ing` | Below `tau_ing`: no match. On error, LLM `librarian/find_match`. |
-| 3 consolidation | LLM `librarian/consolidate` | `classifier/consolidate`: a Choice between `Modify` and `New note`. The note is merged only if the choice is `Modify` with confidence at least `tau_cons`. | Choice | `tau_cons` | When unsure, a new note is written. On error, LLM `librarian/consolidate`. |
-| write | LLM `librarian/merge` or `librarian/name_folder` | same LLM step | - | - | - |
+| 3 consolidation | LLM `librarian/consolidate` | `classifier/consolidate`: a Choice between `Modify` and `New note`. It reads the source state (as routing does) when the source is at most twice `note_chars` long, else the candidate's compact form. The note is merged only if the choice is `Modify` with confidence at least `tau_cons`. | Choice | `tau_cons` | When unsure, a new note is written. On error, LLM `librarian/consolidate`. |
+| write | LLM `librarian/merge` or `librarian/name_folder`. A merge reads the existing note and the incoming note (the candidate that step 0 wrote, with the source's title and location), not the whole source; what does not fit in the call is cut and logged. If the draft is unchanged, or drops more than half of the new codes, numbers and names of the incoming text, the merge is asked once more from the source with `librarian/merge_source`. | same LLM step | - | - | - |
 | relate | LLM `librarian/relate` | `classifier/relate`: one Noul per candidate. Links go to notes above `tau_link`, at most `OKF_MAX_LINKS` (5). | Noul | `tau_link` | On error, LLM `librarian/relate`. |
 
 In step 2, the candidate folders are every folder on the finished beam paths. In
@@ -45,10 +45,13 @@ The **retrieval** steps (`Researcher.ask` = `select` then `answer`):
 | `tau_route` | `OKF_TAU_ROUTE` | 0.6 | 0.6 | If Choice confidence is below this, keep the top `beam` options instead of 1 |
 | `tau_path` | `OKF_TAU_PATH` | 0.5 | 0.65 | If the best path score is below this, the LLM routes |
 | `tau_ing` | `OKF_TAU_ING` | 0.5 | 0.45 | Best note probability must be above this to count as a match |
-| `tau_cons` | `OKF_TAU_CONS` | 0.6 | 0.05 | `Modify` confidence must be at least this to merge |
+| `tau_cons` | `OKF_TAU_CONS` | 0.6 | 0.26 | `Modify` confidence must be at least this to merge |
 | `tau_fold` | `OKF_TAU_FOLD` | 0.08 | 0.15 | Folder probability must be above this to explore the folder |
 | `tau_ret` | `OKF_TAU_RET` | 0.1 | 0.2 | Note probability must be above this to read the note |
 | `tau_link` | `OKF_TAU_LINK` | 0.6 | 0.5 | Relatedness must be above this to add a See-also link |
+| `votes` | `OKF_VOTES` | 1 | 1 | Routing: classifier calls averaged on a borderline decision (1: off) |
+| `vote_band` | `OKF_VOTE_BAND` | 0.05 | 0.05 | Routing: how close to `tau_route`, `tau_path` or a tie between two options counts as borderline |
+| `fallback_menu` | `OKF_FALLBACK_MENU` | visited | visited | Routing fallback: folders the LLM chooses among, `visited` (those the classifier explored) or `tree` (those and the rest of the wiki); `tree` is an extension of the paper |
 | `beam` | `OKF_BEAM` | 2 | 2 | Ingestion: paths kept per uncertain routing step |
 | `retrieval_beam` | `OKF_RETRIEVAL_BEAM` | 6 | 6 | Retrieval: folders explored per level |
 | `k` | `OKF_K` | 8 | 5 | CROW retrieval: notes passed to the answer |
@@ -62,8 +65,13 @@ Laya's `typed-decisions` checkpoint, its default model, answers with flatter pro
 than Jev. Measured on 25 sample notes, it never picks `New subfolder` and scores the
 routes it gets wrong at 0.61 at most, so with Jev's 0.5 an undecided note goes where
 the classifier leans; at 0.65 the LLM routes it instead. It answers `Modify` to almost every
-consolidation, with a confidence of 0.04–0.12 for a real follow-up and at most 0.044 for a
-related but distinct note, hence 0.05.
+consolidation, with a confidence of 0.23–0.40 for a real follow-up and at most 0.25 for a
+related but distinct note, hence 0.26.
+
+A Choice's confidence is computed by the library from the probabilities, the same way on
+every server, on the scale the thresholds are calibrated on; the confidence a server sends is
+ignored, since servers disagree on what it means. One set of thresholds therefore works on
+a hosted API, a Laya server or Ollama alike.
 
 The ingestion thresholds are the paper's package defaults, never calibrated. The retrieval
 values are the ones the paper calibrated on its corpus (§8.4): with 0.5, most right notes
@@ -84,7 +92,7 @@ choice, confidence, fallback)`. You can read it from
 
 | `step` | `choice` | `confidence` holds | Calibrates |
 |---|---|---|---|
-| `route_step` | options kept at one level | Choice confidence | `tau_route` |
+| `route_step` | options kept at one level, ending ` (n votes)` when averaged over n calls | Choice confidence (the mean when averaged) | `tau_route` |
 | `route` | `"/folder (Here)"` or `"/folder (New subfolder)"` | path score (`fallback: true` when the LLM chose) | `tau_path` |
 | `match` | note path, or `none` | best note probability | `tau_ing` |
 | `consolidate` | `modify` or `new` | Choice confidence | `tau_cons` |
@@ -110,8 +118,39 @@ changes or the wiki grows.
 
 ## Good to know
 
+- **Revisions replaced in place (the default; extends the preprint's flow).** With `revisions = "replace"`
+  (`OKF_REVISIONS`, the default; `merge` keeps the preprint's merge), a step is inserted between consolidate and merge
+  (`agents/revisions.py`). Code checks that the source revises the one document the note cites: the body was written
+  by code alone (`generated.body_hash`, which every note now carries), every cited source is a raw copy of the same
+  document (same normalized title and file name), and the source contains the latest copy (8-word shingles). In
+  CROW one typed question (`revise/identity`) asks whether the changes replace the subject of the document; a
+  failure or a `ModelError` means the usual merge. If the guard passes, the note is not merged: its body goes to
+  `.archive/` (hidden from the tree), the frontmatter gets `previous_version`, and the new body is the summary of the
+  source, a "Changes from the previous version" section (each changed value with "previously ...") and a "From the
+  previous version" section with the sentences that still hold (CROW asks `revise/still_holds` for each). The
+  researcher, when a selected note has `previous_version` and the question asks about the past (`ask/historical`),
+  reads the archived copy after the note, may cite it, and is told to answer with the earlier value
+  (`HISTORY_HINT`, added to the question). Whenever the researcher passes two or more notes to the answer, one typed
+  question (`ask/conflict`) reads the passage of each note closest to the question and asks whether the notes
+  disagree; above 0.4 the question gets `CONFLICT_HINT` (after the history hint), asking the answer to report every
+  value and say which note gives which and which source is more recent. `answer_conflicts = false`
+  (`OKF_ANSWER_CONFLICTS`) skips the question and the hint (0.3.0's answer input). In classic the `jev` checks are absent: code decides alone.
 - **`relate` extends the preprint.** See-also links were outside the preprint;
-  the paper's v1.0 describes them (§5.4).
+  the paper's v1.0 describes them (§5.4). The candidates also include up to 40 notes anywhere in the wiki
+  that share rare values (codes, amounts, dates, names held by few notes) with the note, skipping notes that
+  already have 12 See-also links; that is an extension of the paper. `relate_rare_values = false`
+  (`OKF_RELATE_RARE_VALUES`) leaves them out (0.3.0's `relate`).
+- **Routing audit and taxonomy health (extensions, never automatic).** `wiki.audit_routes(min_confidence=0.7, apply=False)`
+  (`llmwiki2 audit`, `POST /audit`) routes every note of the tree again, with `route`'s own per-level choices and beam on
+  the same state (`route_state`) but never its LLM fallback, and lists the notes whose route is a folder other than their
+  own with a confidence of at least `min_confidence`. A route into a subfolder of the note's own folder is not a
+  proposal (a tidy-up, not a misroute: it was most of the wrong proposals measured). A route that would fall back, or end in "New subfolder" or "None of
+  these", gives no proposal. It makes no LLM call, only classifier calls, and moves notes (with `move_note`) only with
+  `apply`. `wiki.taxonomy_health()` (`llmwiki2 health`, `GET /taxonomy`) reads `log.md` alone, no model: per folder and
+  month, the notes filed (Created, Merged, Revised lines), the "Created folder" lines under the folder and the lines
+  ending `, routed by fallback` (the librarian writes that when the LLM fallback chose the folder). A row is flagged when
+  at least `min_filed` (5) notes were filed and (new subfolders + fallbacks) / filed is over `max_share` (0.3): a folder
+  that keeps needing subfolders or the LLM, so its description or the thresholds deserve a look.
 - **Folders are created lazily.** A `New subfolder` route creates the folder,
   named by the LLM with `librarian/name_folder`, only when a new note is written
   into it. If step 3 merges instead, no folder is created, so a merge never
@@ -122,7 +161,19 @@ changes or the wiki grows.
   hook decides. In the decisions, that step's `decider` is `llm`. A failed route
   also records `choice: "error"`, and a failed retrieval records
   `step: "select"`, both with `fallback: true`.
-- **Every decision reads a compact state**, not the full source: the title, the
+- **Route reads a deterministic state**, built from the source text and not from the
+  LLM's summary, which differs on every run. A text that fits in
+  `OKF_CLASSIFIER_STATE_CHARS` is read whole. A longer one is read as its own summary (or
+  introduction), the list of its sections and the opening of each; without headings, as
+  passages at even offsets. A custom `summarize` may set `Candidate.state` itself.
+  For a source longer than twice `note_chars` the route reads sections and openings only, not the native summary (the
+  state is still deterministic; `steps_crow.routing_state`), unless `summarize` set the state.
+  **Limit (sources up to twice `note_chars`; longer ones skip the native summary):** the state of a source leads with its own summary (up to 40% of it),
+  so a summary that misrepresents the document misleads the route. In a benchmark, a laboratory manual
+  whose executive summary dwelt on customer complaints went to `/customers` in
+  half the runs or more. The summary is still used, because a faithful one is the best
+  short description of a long text.
+- **The other decisions read a compact state**, not the full source: the title, the
   summary and the opening passage, up to `OKF_CLASSIFIER_STATE_CHARS` (6000).
   Consolidation also adds the existing note, up to half of
   `OKF_CLASSIFIER_REQUEST_CHARS`. For retrieval, the state is the question.
@@ -136,3 +187,27 @@ Known classifier weaknesses:
   by the LLM and why an unsure consolidation becomes a new note.
 - **Long, irrelevant state.** Extra text lowers accuracy. That is why decisions
   read the compact state instead of the whole source.
+
+## Measured against 0.3.0
+
+Preliminary results of 2026-10-10 and 2026-10-11 (CROW 0.4.0 against CROW and classic 0.3.0, the same documents through OpenRouter,
+two to four writing models; `benchmarks/` holds the corpora and scripts):
+
+- **Filing.** On 150 short documents, with the same writing model on every flow, 26.5 documents out of place against
+  34.5 for CROW 0.3.0 and 41 for classic. Out of place is a document in the wrong part of the wiki, in a folder too
+  general when a better one existed, a new topic pushed into an unrelated folder, a folder holding a single stray
+  document, a document sharing a folder with documents of other subjects, or a wrong merge; every placement the labels
+  disputed was judged blind by two reviewers, who kept each one a reader would accept.
+- **Folders.** `strict_new_folders` alone, on three writing models: 17% to 32% fewer documents out of place, no folder
+  holding a single stray document (11.5 with CROW 0.3.0), fewer documents sharing a folder with unrelated ones (3.2
+  against 8.5) and fewer LLM fallbacks; a note on a new subject more often stays in the parent folder.
+- **Cost of filing.** About 1.15 times CROW 0.3.0 per document; classic costs about 1.6 times the new CROW.
+  `strict_new_folders` changes the cost by -5% to +5%.
+- **Revisions.** After a document is revised twice, answers give the current value 24 times out of 24 (18 with 0.3.0).
+- **Long documents.** Facts past the first 100k characters of a source reach the note 0.60 to 0.73 of the time
+  (0.3.0 does not read that far).
+- **Duplicates and contradictions.** 11 of 15 restatements in distant folders are linked (4 with 0.3.0); answers report
+  both values for 7 of 10 contradictions (3 with 0.3.0).
+- **Updates.** 0.88 to 0.92 of the updates are merged into the note they update (0.77 to 0.81 with 0.3.0).
+- **Cost as the wiki grows.** The same documents filed into a wiki of 150 notes instead of 23 cost about 1.2 times
+  as much each, with the same number of model calls, as in 0.3.0.

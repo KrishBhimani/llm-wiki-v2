@@ -19,11 +19,14 @@ tree is fully described by standard OKF index files. Links are relative.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import logging
 import os
 import shutil
 import threading
-from collections.abc import Iterator
+import time
+import uuid
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,6 +51,7 @@ from llmw2.bundle.tree import (
     note_dir,
     parse_index,
     rel_link,
+    rewrite_links,
     slugify,
     split_see_also,
     subfolder_of,
@@ -55,6 +59,15 @@ from llmw2.bundle.tree import (
 from llmw2.errors import InputError
 
 log = logging.getLogger(__name__)
+
+ARCHIVE_DIR = ".archive"  # superseded versions of notes; hidden from the tree
+REPLACE_ATTEMPTS = 6  # about 0.3 s in all: long enough for a reader to close the file it was reading
+
+
+def body_hash(body: str) -> str:
+    """The hash of a note's main body: it tells whether code alone wrote it."""
+    return "sha256:" + hashlib.sha256(body.strip().encode("utf-8")).hexdigest()
+
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -124,7 +137,7 @@ class WikiStore:
                 return
             fd = os.open(self.root, os.O_RDONLY)
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                fcntl.flock(fd, fcntl.LOCK_EX)  # type: ignore[attr-defined,unused-ignore]  # stubs hide it on Windows
                 yield
             finally:
                 os.close(fd)  # closing the descriptor releases the lock
@@ -202,12 +215,14 @@ class WikiStore:
         slug = self.unique_slug(folder, slugify(title))
         path = folder.path / f"{slug}.md"
         rel = f"{folder.rel}/{slug}.md" if folder.rel else f"{slug}.md"
+        note_body = body.rstrip() + "\n"
         frontmatter: dict[str, Any] = {
             "type": NOTE_TYPE,
+            "id": uuid.uuid4().hex[:12],  # stable: no update, move or revision changes it, and no link or index uses it
             "title": title.strip(),
             "description": summary.strip(),
             "tags": tags,
-            "generated": {"by": self.actor, "at": now_iso()},
+            "generated": {"by": self.actor, "at": now_iso(), "body_hash": body_hash(split_see_also(note_body)[0])},
             "sources": [{"id": "s1", **source}],
         }
         if fields:
@@ -228,15 +243,17 @@ class WikiStore:
         tags: list[str],
         source: dict[str, Any],
         fields: dict[str, Any] | None = None,
+        previous_version: str | None = None,
     ) -> Note:
         """Rewrite a note in place, keeping unknown frontmatter keys and its See-also links.
 
-        `fields` are added to the note's own (new keys win).
+        `fields` are added to the note's own (new keys win). `previous_version`: the archived copy of the body it replaces.
         """
         fm = note.frontmatter
         fm["title"], fm["description"] = title.strip(), summary.strip()
         fm["tags"] = list(dict.fromkeys([*note.tags, *tags]))
-        fm["generated"] = {"by": self.actor, "at": now_iso()}
+        if previous_version:
+            fm["previous_version"] = previous_version
         sources: list[Any] = fm["sources"] if isinstance(fm.get("sources"), list) else []
         used = {str(s.get("id")) for s in sources if isinstance(s, dict)}
         new_id = next(f"s{n}" for n in range(1, len(sources) + 2) if f"s{n}" not in used)
@@ -245,10 +262,25 @@ class WikiStore:
             old = fm.get("fields")
             fm["fields"] = {**(old if isinstance(old, dict) else {}), **fields}
         note.body = join_see_also(body, split_see_also(note.body)[1])
+        fm["generated"] = {"by": self.actor, "at": now_iso(), "body_hash": body_hash(split_see_also(note.body)[0])}
         self._save(note)
         if note.folder is not None:
             self.write_index(note.folder)
         return note
+
+    def archive_note(self, note: Note) -> str:
+        """Keep a copy of a note as it is, in the hidden archive; returns its bundle path ("/.archive/…").
+
+        `load()` skips the folder, so no step sees the copy. No index or log entry is written.
+        """
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        base = f"{ARCHIVE_DIR}/{note.rel.removesuffix('.md')}--{stamp}"
+        rel = next(r for n in range(1, 1000) if not (self.root / (r := f"{base}{f'-{n}' if n > 1 else ''}.md")).exists())
+        fm = {**note.frontmatter, "status": "archived", "archived_from": f"/{note.rel}", "archived_at": now_iso()}
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(path, OKFDocument(fm, note.body).serialize())
+        return f"/{rel}"
 
     def link(self, a: Note, b: Note) -> bool:
         """Add a See-also entry in both notes; False if they were already linked."""
@@ -357,6 +389,83 @@ class WikiStore:
                 lines.insert(at, "")
         write_atomic(path, "\n".join(lines).rstrip() + "\n")
 
+    # -- moving and describing ------------------------------------------------
+
+    def move_note(self, rel: str, folder_rel: str) -> Note:
+        """File a note in another folder, keeping every link to and from it valid; InputError when it cannot be.
+
+        The new file is written first, then the links of the other notes and the archived copies are pointed at it,
+        and the old file goes last, so a failure half way never loses the note.
+        """
+        root = self.load()
+        old = rel.strip().lstrip("/")
+        note = next((n for n in root.all_notes() if n.rel == old), None)
+        if note is None or note.folder is None:
+            raise InputError(f"no note at /{old}: only notes of the tree can be moved, not the index, log, sources or archive")
+        target = root.find(folder_rel)
+        if target is None:
+            raise InputError(f"no folder at /{folder_rel.strip().strip('/')}")
+        if target is note.folder:
+            raise InputError(f"/{old} is already in {target.label}")
+        slug = self.unique_slug(target, note.slug)
+        new = f"{target.rel}/{slug}.md" if target.rel else f"{slug}.md"
+
+        def remap(path: str) -> str:
+            return new if path == old else path
+
+        moved = Note(target.path / f"{slug}.md", new, dict(note.frontmatter), note.body, target)
+        self._relink(moved, old, new, remap)
+        self._save(moved)  # the new file first
+        for other in root.all_notes():
+            if other is not note:
+                self._relink(other, other.rel, other.rel, remap)
+        self._rehome_archive(old, new)
+        note.path.unlink()
+        note.folder.notes.remove(note)
+        target.notes.append(moved)
+        self.write_index(note.folder)
+        self.write_index(target)
+        self.append_log("Moved", f"from /{old} to /{new}", new, moved.title)
+        return moved
+
+    def _relink(self, note: Note, from_rel: str, to_rel: str, remap: Callable[[str], str]) -> None:
+        """Point the links in a note's body through `remap` (it is written at `to_rel`); saved if they changed."""
+        body = rewrite_links(note.body, from_rel, to_rel, remap)
+        if body == note.body:
+            return
+        gen = note.frontmatter.get("generated")
+        if isinstance(gen, dict) and gen.get("body_hash") == body_hash(split_see_also(note.body)[0]):
+            gen["body_hash"] = body_hash(split_see_also(body)[0])  # still written by code alone: keep it provable
+        note.body = body
+        if note.path.exists():
+            self._save(note)
+
+    def _rehome_archive(self, old: str, new: str) -> None:
+        """Archived copies of the note at `old` now say they come from `new`."""
+        for path in sorted((self.root / ARCHIVE_DIR).rglob("*.md")):
+            try:
+                doc = OKFDocument.parse(path.read_text(encoding="utf-8"))
+            except OKFDocumentError:
+                continue
+            if doc.frontmatter.get("archived_from") == f"/{old}":
+                doc.frontmatter["archived_from"] = f"/{new}"
+                write_atomic(path, doc.serialize())
+
+    def describe_folder(self, rel: str, description: str) -> Folder:
+        """Change the one-line description of a folder, kept in its parent's index; InputError for the root or none."""
+        folder = self.load().find(rel)
+        if folder is None:
+            raise InputError(f"no folder at /{rel.strip().strip('/')}")
+        if folder.parent is None:
+            raise InputError("the root folder has no description")
+        text = " ".join(description.split())
+        if not text:
+            raise InputError("a folder needs a description: one line saying what belongs in it")
+        folder.description = text
+        self.write_index(folder.parent)
+        self.append_log("Described folder", text, f"{folder.rel}/{INDEX}", folder.label)
+        return folder
+
     # -- deleting -------------------------------------------------------------
 
     def delete_note(self, rel: str) -> Deleted:
@@ -456,7 +565,14 @@ def write_atomic(path: Path, text: str) -> None:
     # One temporary name per process and thread: two writers never share, and so never clobber, a temp file.
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, path)
+        tmp.write_text(text, encoding="utf-8", newline="\n")  # "\n" on every system: a bundle moves between them
+        for attempt in range(REPLACE_ATTEMPTS):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:  # Windows: the target is open in another thread or process for a moment
+                if attempt == REPLACE_ATTEMPTS - 1:
+                    raise
+                time.sleep(0.01 * 2**attempt)
     finally:
         tmp.unlink(missing_ok=True)

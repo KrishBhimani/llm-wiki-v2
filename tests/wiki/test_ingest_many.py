@@ -73,10 +73,13 @@ def names(items: list[Item]) -> list[str]:
 TIMESTAMP = re.compile(r"\d{8}-\d{6}|\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?")
 
 
+NOTE_ID = re.compile(r"^id: '?[0-9a-f]{12}'?$", re.MULTILINE)  # a note's random stable id
+
+
 def snapshot(bundle: Path) -> dict[str, str]:
     """Every file of the bundle with its timestamps blanked: what two runs must agree on byte for byte."""
     return {
-        TIMESTAMP.sub("<time>", str(p.relative_to(bundle))): TIMESTAMP.sub("<time>", p.read_text(encoding="utf-8"))
+        TIMESTAMP.sub("<time>", str(p.relative_to(bundle))): NOTE_ID.sub("id: <id>", TIMESTAMP.sub("<time>", p.read_text(encoding="utf-8")))
         for p in sorted(bundle.rglob("*"))
         if p.is_file()
     }
@@ -588,12 +591,12 @@ def custom_extract(ctx: StepContext, data: bytes, filename: str) -> str:
 
 
 class CountingLLM(ContentLLM):
-    def chat(self, messages: list[dict[str, str]], *, op: str = "") -> str:
+    def chat(self, messages: list[dict[str, str]], *, op: str = "", json_mode: bool = False, max_tokens: int | None = None) -> str:
         if op == "custom/extract":
             self.calls.append((op, messages))
             self.usage.record("llm", self.model, *LLM_TOKENS, op=op)
             return "ok"
-        return super().chat(messages, op=op)
+        return super().chat(messages, op=op, json_mode=json_mode, max_tokens=max_tokens)
 
 
 def test_each_items_usage_holds_its_own_extract_summarize_and_filing_calls_and_nothing_else(tmp_path: Path) -> None:

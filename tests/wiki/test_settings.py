@@ -20,6 +20,12 @@ from llmw2.errors import InputError
 from llmw2.models.llm import live_models
 from llmw2.settings import Settings, mask, settings_path
 
+
+def owner_only(path: Path) -> bool:
+    """Mode 0600 where modes exist; Windows has none (a file is private by the ACL of the user's profile)."""
+    return os.name == "nt" or stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 KEY = "sk-or-v1-0123456789abcdef"
 LAYA = {"classifier_provider": "custom", "classifier_base_url": "http://127.0.0.1:8001/v1"}  # the custom classifier is Laya
 
@@ -47,7 +53,7 @@ def test_save_writes_only_what_changed_readable_by_the_owner_only() -> None:
     cfg = settings.save({"provider": "openrouter", "api_key": KEY, "model": "", "base_url": "", "mode": "crow"})
 
     assert written(settings) == {"llm": {"provider": "openrouter", "api_key": KEY}, "mode": "crow"}
-    assert stat.S_IMODE(settings.path.stat().st_mode) == 0o600
+    assert owner_only(settings.path)
     assert (cfg.mode, cfg.llm.api_key, cfg.classifier.api_key) == ("crow", KEY, KEY)  # one OpenRouter key for both
 
 
@@ -87,7 +93,7 @@ def test_save_when_the_llm_switches_provider_and_back_then_its_key_and_model_com
     # ASSERT
     assert (cfg.llm.provider, cfg.llm.model, cfg.llm.api_key) == ("openrouter", "deepseek/deepseek-v4.1-flash", KEY)
     memory = settings.view()["memory"]["llm"]
-    params = {"temperature": 0.1, "timeout": 120.0}  # the defaults: none was changed
+    params = {"temperature": 0.1, "timeout": 120.0, "seed": "", "pin_provider": "", "read_chars": ""}  # the defaults: none was changed
     assert memory["custom"] == {"model": "bonsai", "base_url": "http://127.0.0.1:8080/v1", "api_key": "", **params}
     assert memory["openrouter"] == {"model": "deepseek/deepseek-v4.1-flash", "base_url": "", "api_key": "…cdef", **params}
     assert KEY not in json.dumps(settings.view())
@@ -142,7 +148,7 @@ def test_save_when_a_wide_temp_file_is_left_over_then_the_file_is_still_owner_on
 
     # ASSERT
     assert not leftover.exists()  # the save went through the leftover file
-    assert stat.S_IMODE(settings.path.stat().st_mode) == 0o600
+    assert owner_only(settings.path)
 
 
 def test_the_environment_and_flags_win_and_their_fields_are_not_saved(tmp_path: Path) -> None:
@@ -378,7 +384,7 @@ def test_save_when_the_classifier_is_custom_then_laya_s_preset_applies_and_nothi
     cfg = settings.save({"provider": "ollama", **LAYA, "crow_tau_path": "0.65", "crow_k": "5"})
 
     # ASSERT
-    assert (cfg.crow.tau_path, cfg.crow.tau_cons, cfg.crow.k) == (0.65, 0.05, 5)
+    assert (cfg.crow.tau_path, cfg.crow.tau_cons, cfg.crow.k) == (0.65, 0.26, 5)
     assert written(settings)["classifier"] == {"provider": "custom", "base_url": "http://127.0.0.1:8001/v1"}
     assert settings.view()["ready"] is True  # Laya on this computer takes no key
 
@@ -393,7 +399,7 @@ def test_save_when_a_threshold_is_changed_then_it_is_kept_for_that_classifier_on
     laya = settings.save({**LAYA, "crow_tau_path": "0.7"})
 
     # ASSERT
-    assert (jev.crow.tau_path, laya.crow.tau_path, laya.crow.tau_cons) == (0.5, 0.7, 0.05)
+    assert (jev.crow.tau_path, laya.crow.tau_path, laya.crow.tau_cons) == (0.5, 0.7, 0.26)
     assert written(settings)["classifier"] == {"provider": "custom", "base_url": "http://127.0.0.1:8001/v1", "crow": {"tau_path": "0.7"}}
     memory = settings.view()["memory"]["classifier"]
     assert memory["custom"]["crow"]["tau_path"] == 0.7 and memory["openrouter"]["crow"]["tau_path"] == 0.5

@@ -61,6 +61,7 @@ so you can add to it or delete it.
 | **Ask questions** | Type a question. The answer cites the notes it used: click one to read it. |
 | **See the brain** | A live map of your folders, notes and links. |
 | **Delete** | Hover a note or folder in the sidebar and press the bin, or **Delete note** at the foot of a note. Links to it go from the other notes. **Empty the wiki** on the home page starts over. |
+| **Move and describe** | **Move** at the foot of a note files it in another folder; every link to and from it follows. The pencil beside a folder in the sidebar edits its description, the line the librarian routes by. |
 | **Keep your files** | Plain Markdown in `~/llm-wiki`: open it in any editor, keep it in git. |
 
 ## Something wrong?
@@ -107,6 +108,8 @@ curl -X POST localhost:8000/ask -H 'content-type: application/json' \
 The wiki is plain Markdown files you can read, edit and keep in git (`./wiki`
 with Docker). The API docs are at http://localhost:8000/docs; with Docker the
 CLI runs in the same image: `docker compose run --rm wiki llmwiki2 check`.
+To file a note elsewhere or reword a folder's description from the terminal: `llmwiki2 move finance/pricing.md /sourcing` and `llmwiki2 describe /finance "Money in and out."`.
+In CROW mode, `llmwiki2 audit [--min-confidence 0.7] [--apply]` lists the notes the classifier would file in another folder today (no LLM call; it moves them only with `--apply`), and `llmwiki2 health [--min-filed 5] [--max-share 0.3]` shows, from `log.md`, the folders that keep needing new subfolders or the LLM fallback. Every new note carries a stable `id` in its frontmatter (`wiki.find_note(id)`).
 
 | Endpoint | What it does |
 |---|---|
@@ -116,6 +119,8 @@ CLI runs in the same image: `docker compose run --rm wiki llmwiki2 check`.
 | `POST /ask` `{question}` | answer with citations; returns the notes read and token usage |
 | `GET /tree` · `GET /note?path=…` | folder tree · one note (frontmatter and Markdown body) |
 | `GET /check` · `GET /graph` | lint problems · the wiki as nodes and links (JSON) |
+| `POST /note/move` `{path, folder}` · `POST /folder/describe` `{path, description}` | move a note to another folder, links following (returns the note as `GET /note`) · change a folder's description |
+| `POST /audit` `{min_confidence?, apply?}` · `GET /taxonomy` | CROW: notes the classifier would file in another folder (moved if `apply`) · per folder and month, new subfolders and fallbacks (from the log) |
 | `DELETE /note?path=…` · `DELETE /folder?path=/…` · `DELETE /wiki` | delete a note · a folder with all it holds · everything; links to them go, and raw copies no remaining note cites |
 | `GET /usage` · `GET /health` | token totals per ledger and model · status |
 | `GET /settings` · `POST /settings` · `POST /settings/test` | provider, model and key (masked) · save them · try them; changes from this machine only |
@@ -280,6 +285,13 @@ list is in [.env.example](https://github.com/crow-hq/llm-wiki-v2/blob/main/.env.
 | `OKF_PROMPTS_DIR` | — | folder whose prompt files replace the packaged ones |
 | `OKF_UPLOAD_MB` | `25` | largest file or text the server accepts (413 above it) |
 | `OKF_CONCURRENCY` | `4` | documents read and summarized at once by `sync`, the web page and `Wiki.ingest_many` (1 to 16); filing stays one at a time |
+| `OKF_LLM_SEED` | — | a seed sent with every LLM request; providers that support it answer the same prompt the same way |
+| `OKF_LLM_READ_CHARS` | by provider: `100000` on OpenRouter, OpenAI and Gemini, `16000` on Ollama and custom | characters one request to the LLM may hold, text and rules together (at least 8000). A source that does not fit is summarized in parts, and a merge cuts the incoming note to what is left of it after the existing one |
+| `OKF_NOTE_CHARS` | `10000`, and at most half of what one request holds | about how many characters a note body may have (at least 1000): asked of the model, not enforced; a body over 1.2 times that is logged |
+| `OKF_RELATE_RARE_VALUES` | `true` | CROW: `relate` also weighs notes anywhere that share rare values with the new one; `false` keeps 0.3.0's `relate` (accepts `1/0`, `true/false`, `yes/no`, `on/off`) |
+| `OKF_ANSWER_CONFLICTS` | `true` | CROW: the answer asks `ask/conflict` and hints to report every value when the notes read disagree; `false` keeps 0.3.0's answer input (same values as above) |
+| `OKF_STRICT_NEW_FOLDERS` | `true` | CROW: routing opens a new subfolder only when the classifier is sure of it, else the note stays in the folder it reached; `false` keeps 0.3.0's routing (same values as above) |
+| `OKF_LLM_PIN_PROVIDER` | — | OpenRouter only: comma-separated providers that may answer, in order, with no fallback (e.g. `DeepInfra,Novita`); a call fails when none is up. Ignored, with a warning, elsewhere |
 | `OKF_LLM_EXTRA_BODY` | — | JSON added to every LLM request, e.g. `'{"provider":{"order":["together"]}}'` to pin fast OpenRouter providers |
 
 Providers, the settings file and the classifier route: [docs/wiki/providers.md](https://github.com/crow-hq/llm-wiki-v2/blob/main/docs/wiki/providers.md).
