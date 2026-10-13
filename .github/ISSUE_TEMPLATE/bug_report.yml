@@ -1,0 +1,60 @@
+name: Bug report
+description: Something does not work as the README says.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. llmwiki2 ingest notes.pdf
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The llmw2 line of `uv tool list`.
+      placeholder: llmw2 v0.4.0
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and model
+      placeholder: Ollama gemma4, OpenRouter ..., OpenAI ...
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - CROW
+        - classic
+        - not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: run
+    attributes:
+      label: How you run it
+      options:
+        - web UI (llmwiki2)
+        - CLI
+        - Docker
+        - HTTP API
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error message
+      description: Remove API keys and anything private before pasting.
+      render: text

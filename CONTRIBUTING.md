@@ -1,6 +1,10 @@
 # Contributing
 
 Thanks for helping. Bug reports, ideas and pull requests are all welcome.
+Questions and ideas go to [Discussions](https://github.com/crow-hq/llm-wiki-v2/discussions),
+bugs and feature requests to [issues](https://github.com/crow-hq/llm-wiki-v2/issues/new/choose),
+and security reports through [SECURITY.md](SECURITY.md). Everyone here follows the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Licence and CLA
 

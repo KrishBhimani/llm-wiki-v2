@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or help
+    url: https://github.com/crow-hq/llm-wiki-v2/discussions/categories/q-a
+    about: Ask how to do something in Discussions.
+  - name: Idea to discuss first
+    url: https://github.com/crow-hq/llm-wiki-v2/discussions/categories/ideas
+    about: Talk an idea through before it becomes a feature request.
+  - name: Security vulnerability
+    url: https://github.com/crow-hq/llm-wiki-v2/security/advisories/new
+    about: Report it privately, never in a public issue.
