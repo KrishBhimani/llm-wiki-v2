@@ -1,7 +1,7 @@
 # CROW mode
 
 CROW (F. Cesarini and M. Sassarini, *CROW: Classifier-Routed Organization of LLM
-Wikis*, 2026, [doi:10.5281/zenodo.22900601](https://doi.org/10.5281/zenodo.22900601))
+Wikis*, 2026, [doi:10.5281/zenodo.22898752](https://doi.org/10.5281/zenodo.22898752))
 separates deciding from writing: a typed classifier (TypeSafe Jev, over the
 System One API) takes every filing and retrieval decision by scoring fixed
 options, and the LLM only writes notes, merges, folder names and answers. Each

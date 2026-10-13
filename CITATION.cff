@@ -35,7 +35,7 @@ references:
       - family-names: Sassarini
         given-names: Marco
     year: 2026
-    doi: 10.5281/zenodo.22900601
+    doi: 10.5281/zenodo.22898752
     notes: Preprint
   - type: generic
     title: "LLM Wiki"
