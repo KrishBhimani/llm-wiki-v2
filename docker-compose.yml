@@ -4,7 +4,7 @@
 # llm-wiki-v2 as a server: one container, any OpenAI-compatible provider.
 #   cp .env.example .env          # choose the provider and set its key
 #   docker compose up -d --build
-#   wiki  http://localhost:8000   (API docs at /docs)
+#   wiki  http://localhost:8000
 #   CLI   docker compose run --rm wiki llmwiki2 ask "..."
 # Your wiki is plain OKF markdown in ./wiki: browse it, edit it, git it.
 # Settings come from .env here; the web page shows them but cannot change them.
