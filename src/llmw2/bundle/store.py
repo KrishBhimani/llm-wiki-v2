@@ -61,6 +61,7 @@ from llmw2.errors import InputError
 log = logging.getLogger(__name__)
 
 ARCHIVE_DIR = ".archive"  # superseded versions of notes; hidden from the tree
+SYNC_DIR = ".llmw2/sync"  # the cursors of `sync`, one file per connector and account
 REPLACE_ATTEMPTS = 6  # about 0.3 s in all: long enough for a reader to close the file it was reading
 
 
@@ -87,6 +88,7 @@ class Deleted:
     notes: list[str] = field(default_factory=list)  # bundle paths of the notes deleted
     folders: list[str] = field(default_factory=list)  # labels of the folders deleted, subfolders included
     sources: list[str] = field(default_factory=list)  # raw copies that no remaining note cites ("/raw/…")
+    archived: list[str] = field(default_factory=list)  # archived versions of the notes deleted ("/.archive/…")
     unlinked: list[str] = field(default_factory=list)  # remaining notes that lost a link to what went
 
     def to_dict(self) -> dict[str, Any]:
@@ -495,13 +497,20 @@ class WikiStore:
         return deleted
 
     def clear(self) -> Deleted:
-        """Empty the wiki: every note, folder and raw copy go, and the log starts again. Other files stay."""
+        """Empty the wiki: every note, folder (with all it holds), raw copy and archived version go, and the log starts
+        again. The sync cursors go too, so the next `sync` files every document again. Other files of the top level stay.
+        """
         root = self.load()
         deleted = self._delete(root, root.all_notes(), list(root.subfolders))
         for raw in sorted((self.root / RAW).glob("*.md")):
             raw.unlink()
             deleted.sources.append(f"/{RAW}/{raw.name}")
         deleted.sources = list(dict.fromkeys(deleted.sources))
+        archive = self.root / ARCHIVE_DIR
+        deleted.archived += [f"/{p.relative_to(self.root).as_posix()}" for p in sorted(archive.rglob("*.md"))]
+        deleted.archived = list(dict.fromkeys(deleted.archived))
+        shutil.rmtree(archive, ignore_errors=True)
+        shutil.rmtree(self.root / SYNC_DIR, ignore_errors=True)
         write_atomic(self.root / LOG, "# Wiki log\n")
         self.append_log("Emptied the wiki", f"{len(deleted.notes)} notes and {len(deleted.folders)} folders deleted")
         return deleted
@@ -536,6 +545,14 @@ class WikiStore:
         for folder in dict.fromkeys(touched):
             if folder.path.is_dir():
                 self.write_index(folder)
+        for path in sorted((self.root / ARCHIVE_DIR).rglob("*.md")):  # the archived versions of what went
+            try:
+                was = OKFDocument.parse(path.read_text(encoding="utf-8")).frontmatter.get("archived_from")
+            except (OKFDocumentError, UnicodeDecodeError):
+                continue
+            if isinstance(was, str) and gone(was.lstrip("/")):
+                path.unlink()
+                deleted.archived.append(f"/{path.relative_to(self.root).as_posix()}")
         cited = {r for n in kept for r in _raw_sources(n)}
         for resource in dict.fromkeys(r for n in notes for r in _raw_sources(n)):
             path = (self.root / resource.lstrip("/")).resolve()
