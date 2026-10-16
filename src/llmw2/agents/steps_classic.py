@@ -60,6 +60,7 @@ def _lower(value: Any) -> Any:
 
 
 Lower = BeforeValidator(_lower)
+NoneIsEmpty = BeforeValidator(lambda value: [] if value is None else value)  # `null` for "nothing" is a fair reply
 
 
 # -- LLM reply schemas ----------------------------------------------------------
@@ -94,13 +95,13 @@ class Consolidation(BaseModel):
 
 class Related(BaseModel):
     reasoning: str = ""
-    related: list[str] = []
+    related: Annotated[list[str], NoneIsEmpty] = []
 
 
 class Navigation(BaseModel):
     reasoning: str = ""
-    open: list[str] = []
-    select: list[str] = []
+    open: Annotated[list[str], NoneIsEmpty] = []
+    select: Annotated[list[str], NoneIsEmpty] = []
     done: bool = False
 
 
@@ -522,7 +523,8 @@ def relate(ctx: StepContext, note: Note, others: list[Note]) -> list[Note]:
         reply_chars=DECIDE_CHARS,
     )
     by_rel = {n.rel: n for n in others}
-    related = [by_rel[r.strip().strip("/")] for r in dict.fromkeys(out.related) if r.strip().strip("/") in by_rel]
+    wanted = dict.fromkeys(r.strip().strip("/") for r in out.related)  # "/a.md" and "a.md" are one note, one link
+    related = [by_rel[r] for r in wanted if r in by_rel]
     ctx.decide("relate", "llm", ", ".join(n.rel for n in related) or "none")
     return related[: ctx.cfg.max_links]
 
