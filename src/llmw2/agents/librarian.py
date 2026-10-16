@@ -11,11 +11,13 @@ output of every step is checked before it is used.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, dataclass, field
 from functools import cached_property
 from typing import Any, Literal
 
 from llmw2.agents import linking, revisions
+from llmw2.agents import steps_classic as classic
 from llmw2.agents.base import Decision, clean_tags, unique_objects
 from llmw2.agents.data import Candidate, NoteDraft, Route, Source
 from llmw2.agents.prompts import Prompts
@@ -37,6 +39,8 @@ from llmw2.config import WikiConfig
 from llmw2.models.classifier import Classifier
 from llmw2.models.llm import LLM
 from llmw2.models.usage import UsageReport
+
+log = logging.getLogger(__name__)
 
 __all__ = ["Candidate", "IngestResult", "Librarian", "NoteDraft", "Prepared", "Route", "Source"]
 
@@ -107,8 +111,15 @@ class Librarian:
             created: list[str] = []
             merging = match is not None and check_consolidate(steps.consolidate(ctx, match, cand))
             revised, archived = False, ""
+            draft = None
             if match is not None and merging:
                 draft = revisions.revise(ctx, match, source) if self.cfg.revisions == "replace" else None
+                if draft is None and steps.merge is classic.merge and not classic.merge_fits(self.cfg, match, source, cand):
+                    # the note fills the call: merged, the incoming text would be cut to nothing and lost
+                    log.warning("%s is too long to merge into: the incoming note is written as a new one", match.rel)
+                    ctx.decide("consolidate", "code", "new: no room left to merge into the note")
+                    merging = False
+            if match is not None and merging:
                 if draft is not None:
                     archived = self.store.archive_note(match)
                     revised = True

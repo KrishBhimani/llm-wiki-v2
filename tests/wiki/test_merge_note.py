@@ -262,3 +262,27 @@ def test_a_merge_longer_than_the_soft_cap_is_warned_and_kept(bundle: Path, llm: 
 
     assert "w" * 1_400 in (bundle / "finance" / "seed.md").read_text(encoding="utf-8")
     assert [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_a_note_that_fills_the_call_is_not_merged_into_and_the_incoming_note_is_written_apart(bundle: Path, llm: FakeLLM) -> None:
+    # ARRANGE: a call of 8 000 characters holds 2 000 of text; the existing note takes all of them
+    wiki = wiki_with(bundle, llm, LLM_MERGING, llm=LLMConfig(read_chars=8_000))
+    seed = wiki.store.load().find("/finance").notes[0]
+    wiki.store.update_note(seed, title="Seed", summary="Seeded.", body="Seed. " * 400, tags=[], source={"resource": "/raw/s2.md"})
+    llm.add(SUMMARIZE, INCOMING)
+
+    # ACT
+    result = wiki.ingest(RAW, title="Memo")
+
+    # ASSERT
+    assert result.action == "created"
+    assert MERGE not in llm.ops
+    assert "INCOMING BODY" in wiki.store.read(result.note).body
+    assert any(d.step == "consolidate" and d.decider == "code" for d in result.decisions)
+
+
+def test_a_note_that_leaves_room_for_the_incoming_note_is_merged_into(bundle: Path, llm: FakeLLM) -> None:
+    wiki = wiki_with(bundle, llm, LLM_MERGING, llm=LLMConfig(read_chars=8_000))
+    llm.add(SUMMARIZE, INCOMING).add(MERGE, MERGED)
+
+    assert wiki.ingest(RAW, title="Memo").action == "merged"

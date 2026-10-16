@@ -22,7 +22,7 @@ from llmw2.agents.data import Candidate, NoteDraft, Route, Source
 from llmw2.agents.state import source_state, split_blocks
 from llmw2.bundle.files import extract_text
 from llmw2.bundle.tree import Folder, Note
-from llmw2.config import PROMPT_ROOM
+from llmw2.config import PROMPT_ROOM, WikiConfig
 from llmw2.errors import InputError, ModelError
 
 if TYPE_CHECKING:
@@ -35,6 +35,7 @@ SUMMARY_VERSION = 7
 MIN_PART = 500  # the least a part's notes may take, in characters, for a long source to be summarized at all
 PART_REPLY_FACTOR = 1.3  # a part's reply may take this many times the characters kept of it (`cap`)
 CONSOLIDATE_SOURCE_MAX = 2  # a source longer than this many times `effective_note_chars` is long: read as a state, merged from the text
+MERGE_MIN_INCOMING = 1_000  # characters of the incoming text a merge must read (all of a shorter one), or the note is written apart
 DECIDE_CHARS = 2_000  # about how long a decision is: a short JSON with a reasoning line (it sets the output cap)
 _SENTENCE_END = re.compile(r"\n|[.!?](?=\s)")
 LOST_MAX = 0.1  # a merge may drop at most this share of the existing note's values before it is asked again
@@ -288,20 +289,37 @@ def consolidate(ctx: StepContext, note: Note, cand: Candidate) -> bool:
     return out.decision == "modify"
 
 
+def merge_room(cfg: WikiConfig, note: Note, source: Source, cand: Candidate | None) -> tuple[int, int]:
+    """(characters of the incoming text a merge into `note` can hold, characters it has): what is left of a call
+    after the existing note, and the source's text for a long source (merged from its text), else the candidate's body."""
+    budget = max(0, cfg.effective_read_chars - PROMPT_ROOM - len(note.main_body()))
+    long_source = len(source.text) > CONSOLIDATE_SOURCE_MAX * cfg.effective_note_chars
+    incoming = len(source.text) if long_source or cand is None else len(cand.body)
+    return budget, incoming
+
+
+def merge_fits(cfg: WikiConfig, note: Note, source: Source, cand: Candidate | None) -> bool:
+    """Whether a merge into `note` reads enough of the incoming text: all of it, or `MERGE_MIN_INCOMING` characters.
+
+    A note that fills the call leaves nothing: the merge would be asked with an empty incoming note and lose it.
+    """
+    budget, incoming = merge_room(cfg, note, source, cand)
+    return budget >= min(incoming, MERGE_MIN_INCOMING)
+
+
 def merge(ctx: StepContext, note: Note, source: Source) -> NoteDraft:
     """CROW step 3, modify branch: rewrite the existing note with the incoming one (the candidate), or else with the source.
 
     The incoming text is cut to what is left of the call after the existing note; a cut is logged.
     """
     existing = note.main_body()
-    budget = max(0, ctx.cfg.effective_read_chars - PROMPT_ROOM - len(existing))
     cand = ctx.candidate
+    budget, cut = merge_room(ctx.cfg, note, source, cand)
     if cand is not None:
         body, title, summary, tags = cand.body, cand.title, cand.summary or "(none)", ", ".join(cand.tags) or "(none)"
     else:
         body, title, summary, tags = source.text, source.title or "(none)", "(none)", "(none)"
     long_source = len(source.text) > CONSOLIDATE_SOURCE_MAX * ctx.cfg.effective_note_chars
-    cut = len(source.text) if long_source else len(body)  # a long source is merged from its text, not from the candidate
     if cut > budget:
         log.warning("merge: the incoming text is cut from %d to %d characters to fit the call", cut, budget)
     came = ", ".join(x for x in (source.title or title, source.resource) if x)
