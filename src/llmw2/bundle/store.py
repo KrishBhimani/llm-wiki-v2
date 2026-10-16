@@ -446,14 +446,20 @@ class WikiStore:
         if note.path.exists():
             self._save(note)
 
-    def _rehome_archive(self, old: str, new: str) -> None:
-        """Archived copies of the note at `old` now say they come from `new`."""
+    def _archived(self) -> Iterator[tuple[Path, OKFDocument, str]]:
+        """Every archived copy that can be read: (path, document, the bundle path it was archived from, "" if none)."""
         for path in sorted((self.root / ARCHIVE_DIR).rglob("*.md")):
             try:
                 doc = OKFDocument.parse(path.read_text(encoding="utf-8"))
-            except OKFDocumentError:
+            except (OKFDocumentError, UnicodeDecodeError):
                 continue
-            if doc.frontmatter.get("archived_from") == f"/{old}":
+            was = doc.frontmatter.get("archived_from")
+            yield path, doc, was.lstrip("/") if isinstance(was, str) else ""
+
+    def _rehome_archive(self, old: str, new: str) -> None:
+        """Archived copies of the note at `old` now say they come from `new`."""
+        for path, doc, was in self._archived():
+            if was == old:
                 doc.frontmatter["archived_from"] = f"/{new}"
                 write_atomic(path, doc.serialize())
 
@@ -545,12 +551,8 @@ class WikiStore:
         for folder in dict.fromkeys(touched):
             if folder.path.is_dir():
                 self.write_index(folder)
-        for path in sorted((self.root / ARCHIVE_DIR).rglob("*.md")):  # the archived versions of what went
-            try:
-                was = OKFDocument.parse(path.read_text(encoding="utf-8")).frontmatter.get("archived_from")
-            except (OKFDocumentError, UnicodeDecodeError):
-                continue
-            if isinstance(was, str) and gone(was.lstrip("/")):
+        for path, _, was in self._archived():  # the archived versions of what went
+            if was and gone(was):
                 path.unlink()
                 deleted.archived.append(f"/{path.relative_to(self.root).as_posix()}")
         cited = {r for n in kept for r in _raw_sources(n)}
