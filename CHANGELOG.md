@@ -7,9 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-16
+
+### Added
+
+- Word (`.docx`), PowerPoint (`.pptx`), Excel (`.xlsx`), OpenDocument text (`.odt`) and spreadsheets (`.ods`), read with the standard library only (no new dependency): documents become Markdown with their headings, lists, tables, footnotes and speaker notes; the type is read from the content, and a damaged or hostile file (zip or XML bomb, broken XML) is an input error that does not stop a sync. A slide's heading is its title, `## Results (slide 4)`, so the summary slide of a long deck can be used as its summary; a title repeated on the next slides is not repeated, slide numbers and dates are left out and footers come once at the end. Tables of contents are left out, fill-in lines (`______`, `.......`) become `___`, and an ODT "heading" over 80 characters or with a blank to fill is a paragraph. Excel numbers keep 15 significant digits (`0.0551`, not `5.5100000000000003E-2`), whole numbers all their digits, and percentages read as such (`5.51%`).
+- A spreadsheet is filed one note per sheet: the note describes the sheet (written from its first rows), the sheet's rows are kept as CSV in the raw copy (title rows above the header become a `Caption:` line, which the note's writer reads too), and the researcher adds to a sheet's note the rows a question needs (the whole sheet when it fits, otherwise the closest rows and the totals of its numeric columns). The notes of one workbook link to each other; a sheet deleted from the workbook is marked removed. `IngestResult.parts` holds the other sheets' results.
+- The local folder source skips Office lock files (`~$name.docx`).
+- `benchmarks/office/`: where the 2,629 real Office/ODF files of the readers' bench come from (NapierOne, Common Crawl), with their sha256, the scripts that fetch and select them, the free check between two versions and the criteria of the measures; the files themselves are not committed.
+
 ### Changed
 
+- `Wiki.ingest_many` (and so `sync`) reads spreadsheets first, on worker threads, and reports one item per sheet (`"plan, Budget.csv"`); sync counts are per sheet. A workbook has no record under its own origin key (`Wiki.origin` returns None for it), so a sync that lists it fetches it again; sheets whose text is unchanged cost no model call.
 - CI runs the tests in parallel (`pytest -n auto`, with `pytest-xdist` among the dev dependencies): the Windows jobs had taken the CI from about 3 to about 8.5 minutes.
+
+### Fixed
+
+- One unusable model reply no longer stops a sync: a document whose reply stays invalid after the retry (malformed JSON, no content, cut at the limit) is that document's error, the rest of its page is filed, and the sync stops at the end of the page without saving its cursor, so the next run retries that document alone (`llmwiki2 sync` still exits with 2). Two in a row still stop at once, as a model that cannot answer. New `ReplyInvalid` (a `ModelError`; `ReplyCut` is one).
 
 ## [0.4.4] - 2026-10-15
 
@@ -157,6 +171,7 @@ The first release of the `llm-wiki-v2` repository, built on Google's Open Knowle
 - The package and module are named `llmw2` and the command `llmwiki2`.
 - Dropped the OKF fork (own document parser, no viewer, no reference agent) and the Bifrost gateway.
 
+[0.5.0]: https://github.com/crow-hq/llm-wiki-v2/releases/tag/v0.5.0
 [0.4.4]: https://github.com/crow-hq/llm-wiki-v2/releases/tag/v0.4.4
 [0.4.3]: https://github.com/crow-hq/llm-wiki-v2/releases/tag/v0.4.3
 [0.4.2]: https://github.com/crow-hq/llm-wiki-v2/releases/tag/v0.4.2

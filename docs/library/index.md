@@ -94,7 +94,7 @@ until a model is called, so a wiki whose steps call no model works with none
 |---|---|
 | `init()` | create the bundle (`index.md`, `log.md`, `raw/`) if missing; ingest does it too |
 | `ingest(text, *, title, resource, origin, fields)` | file a text; returns an `IngestResult` |
-| `ingest_file(data, filename, *, resource, origin, fields)` | the same for the bytes of a `.txt`, `.md` or `.pdf` (the `extract` step reads it); the file name gives the title |
+| `ingest_file(data, filename, *, resource, origin, fields)` | the same for the bytes of a text, Markdown, PDF, Word, PowerPoint, Excel or OpenDocument file (the `extract` step reads it); the file name gives the title. A spreadsheet is filed one note per sheet: the first sheet's result, the others in its `parts` |
 | `ingest_many(items, *, concurrency, on_result)` | file a batch, preparing several documents at once; returns a `BatchReport` (see below) |
 | `ask(question)` | answer from the notes; returns an `Answer` |
 | `tree()` | the folder tree, read from disk: `Folder` objects with `.notes` and `.subfolders` |
@@ -158,8 +158,9 @@ result is the same as calling `ingest_file` for each in turn. Which steps run in
 
 `BatchReport`:
 
-- `results`: `(item, result)` in the order they were filed. `result` is an `IngestResult`, or an `InputError` for
-  a document that cannot be read (the batch goes on).
+- `results`: `(item, result)` in the order they were filed. `result` is an `IngestResult`, an `InputError` for
+  a document that cannot be read, or a `ReplyInvalid` for one whose model replies stayed unusable after the retry
+  (the batch goes on; two `ReplyInvalid` in a row stop it, as the model's fault).
 - `not_done`: the items that were not filed because the batch stopped.
 - `stopped`: why it stopped, `None` if it did not.
 
@@ -182,7 +183,7 @@ report = sync(wiki, LocalFolderSource(Path("~/OneDrive")), concurrency=4)   # de
 print(report.to_dict())   # created, merged, unchanged, removed, skipped, errors, stopped
 ```
 
-`LocalFolderSource` reads every `.txt`, `.md` and `.pdf` under a folder. A
+`LocalFolderSource` reads every file of a type the wiki reads under a folder (Office's `~$` lock files excepted). A
 connector for anything else is any object with:
 
 - `name` and `account` (strings: they identify the source in origin keys and in the cursor file);
@@ -205,7 +206,10 @@ Each page of changes is filed as one `ingest_many` batch: the last change of
 each origin counts, removals go first, and an item whose `version` is already
 filed is not fetched. An item that cannot be read (a type that is not
 supported, a scanned PDF) goes into `report.errors` and the sync goes on. A
-model failure stops it: `sync` returns the report so far with `report.stopped`
+document whose model replies stayed unusable goes into `report.errors` too and
+the rest of its page is filed; then the sync stops at the end of that page
+(`report.stopped` says so) without saving its cursor, so the next run retries
+that document alone. Any other model failure stops it: `sync` returns the report so far with `report.stopped`
 set (`llmwiki2 sync` prints it and exits with 2), the cursor stays at the last
 finished page, and the next run resumes there without paying again for what was
 filed. A missing key raises `ConfigError`.
@@ -219,6 +223,7 @@ Everything llmw2 raises on purpose is a `WikiError`:
 | `InputError` | `ValueError` | an empty source or question, an unreadable file type, invalid settings |
 | `ConfigError` | `ValueError` | a broken settings file or environment variable |
 | `ModelError` | `RuntimeError` | a model endpoint failed or answered something unusable (`.status` is the HTTP status, if any); a missing key is one |
+| `ReplyInvalid` | `ModelError` | the model answered, but nothing usable for one request even after a retry (invalid JSON, no content, a reply cut at the limit): the document's failure, not the endpoint's |
 | `StepError` | | a step returned something the flow cannot take (`.step` names it); see [steps.md](steps.md#what-the-core-checks) |
 
 `create_folder` also raises `FileNotFoundError` for a parent that does not
