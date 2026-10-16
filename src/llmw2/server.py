@@ -366,14 +366,19 @@ def create_app(
     @app.post("/settings")
     def save_settings(request: Request, changes: SettingsChanges) -> dict[str, Any]:
         store = editable(request)
+        wanted = changes.model_dump(exclude_unset=True)
         with write_lock:
             try:
-                cfg = store.save(changes.model_dump(exclude_unset=True))
+                _, cfg = store.apply(wanted)
+                fresh = make_wiki(cfg)
+                fresh.init()  # before the file is written: a wiki folder that cannot be made is refused, not saved
+                store.save(wanted)
             except ValueError as e:
                 raise HTTPException(422, str(e)) from e
+            except OSError as e:
+                raise HTTPException(422, f"the wiki folder {cfg.bundle} cannot be used: {e.strerror or e}") from e
             # solo: the old Wiki is not closed, a question may still be using it; one pool per save, reclaimed by the GC.
-            app.state.wiki = make_wiki(cfg)
-            app.state.wiki.init()
+            app.state.wiki = fresh
         return {**store.view(), "editable": True}
 
     @app.post("/settings/test")
