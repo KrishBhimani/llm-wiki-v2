@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The Docker image builds again: `.dockerignore` lets in `LICENSE` and `LICENSES/`, which the package build needs; the README and `docker-compose.yml` no longer point to `/docs`, which the server turns off.
+
 ## [0.5.0] - 2026-10-16
 
 ### Added

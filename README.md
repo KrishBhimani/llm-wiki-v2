@@ -158,8 +158,7 @@ curl -X POST localhost:8000/ask -H 'content-type: application/json' \
 ```
 
 The wiki is plain Markdown files you can read, edit and keep in git (`./wiki`
-with Docker). The API docs are at http://localhost:8000/docs; with Docker the
-CLI runs in the same image: `docker compose run --rm wiki llmwiki2 check`.
+with Docker). With Docker the CLI runs in the same image: `docker compose run --rm wiki llmwiki2 check`.
 To file a note elsewhere or reword a folder's description from the terminal: `llmwiki2 move finance/pricing.md /sourcing` and `llmwiki2 describe /finance "Money in and out."`.
 In CROW mode, `llmwiki2 audit [--min-confidence 0.7] [--apply]` lists the notes the classifier would file in another folder today (no LLM call; it moves them only with `--apply`), and `llmwiki2 health [--min-filed 5] [--max-share 0.3]` shows, from `log.md`, the folders that keep needing new subfolders or the LLM fallback. Every new note carries a stable `id` in its frontmatter (`wiki.find_note(id)`).
 
