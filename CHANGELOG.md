@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The Docker image builds again: `.dockerignore` lets in `LICENSE` and `LICENSES/`, which the package build needs; the README and `docker-compose.yml` no longer point to `/docs`, which the server turns off.
+- Saving settings with a wiki folder that cannot be made (a file, or not writable) is refused with 422 and saves nothing; before, the bad folder was saved and the server failed on it, then and at every start. A missing key is refused before the folder is made. `~` in `OKF_BUNDLE`, `OKF_USAGE_LOG`, `OKF_PROMPTS_DIR` or the wiki folder on the settings page is the home folder, not a folder named `~`; a usage log's folder is made when it does not exist.
 
 ## [0.5.0] - 2026-10-16
 

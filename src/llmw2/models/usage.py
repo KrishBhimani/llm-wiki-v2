@@ -128,6 +128,8 @@ class UsageTracker:
         self._total = UsageReport()
         self._lock = threading.Lock()
         self._log_path = log_path
+        if log_path is not None:  # a log in a folder not made yet: made here, once
+            log_path.parent.mkdir(parents=True, exist_ok=True)
 
     def record(
         self,
@@ -169,7 +171,6 @@ class UsageTracker:
                     "seed": seed,
                     "finish_reason": finish_reason,
                 }
-                self._log_path.parent.mkdir(parents=True, exist_ok=True)  # a log in a folder not made yet must not fail a paid call
                 with self._log_path.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(line) + "\n")
 

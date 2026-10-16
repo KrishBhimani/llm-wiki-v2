@@ -39,7 +39,7 @@ from llmw2.audit import AUDIT_MIN, HEALTH_MAX_SHARE, HEALTH_MIN_FILED
 from llmw2.bundle.files import READABLE, SUFFIXES
 from llmw2.bundle.origin import Origin
 from llmw2.bundle.tree import graph
-from llmw2.config import WikiConfig
+from llmw2.config import WikiConfig, missing_keys
 from llmw2.errors import ConfigError, InputError, ModelError
 from llmw2.models.classifier import probe as probe_classifier
 from llmw2.models.llm import context_warning, live_models, probe
@@ -370,13 +370,24 @@ def create_app(
         with write_lock:
             try:
                 _, cfg = store.apply(wanted)
-                fresh = make_wiki(cfg)
-                fresh.init()  # before the file is written: a wiki folder that cannot be made is refused, not saved
-                store.save(wanted)
             except ValueError as e:
                 raise HTTPException(422, str(e)) from e
+            if problems := missing_keys(cfg):  # refused before anything is made, as `Settings.save` refuses it
+                raise HTTPException(422, " ".join(problems))
+            fresh = make_wiki(cfg)
+            try:
+                fresh.init()  # before the file is written: a wiki folder that cannot be made is refused, not saved
             except OSError as e:
+                fresh.close()
                 raise HTTPException(422, f"the wiki folder {cfg.bundle} cannot be used: {e.strerror or e}") from e
+            try:
+                store.save(wanted)
+            except ValueError as e:
+                fresh.close()
+                raise HTTPException(422, str(e)) from e
+            except OSError:  # the settings file could not be written: its own error, not the wiki folder's
+                fresh.close()
+                raise
             # solo: the old Wiki is not closed, a question may still be using it; one pool per save, reclaimed by the GC.
             app.state.wiki = fresh
         return {**store.view(), "editable": True}
