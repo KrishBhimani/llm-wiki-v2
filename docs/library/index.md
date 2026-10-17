@@ -100,7 +100,7 @@ until a model is called, so a wiki whose steps call no model works with none
 | `tree()` | the folder tree, read from disk: `Folder` objects with `.notes` and `.subfolders` |
 | `create_folder(parent, name, description)` | make a folder by hand; `parent` is `"/"` or `"/finance"` |
 | `move_note(path, folder)` · `describe_folder(path, description)` | move a note to another folder (its links, and links to it, are rewritten; archived copies follow) · change a folder's one-line description |
-| `delete_note(path)` · `delete_folder(path)` · `clear()` | delete; links to what goes are removed, and so are raw copies no remaining note cites |
+| `delete_note(path)` · `delete_folder(path)` · `clear()` | delete; links to what goes are removed, and so are raw copies no remaining note cites and the archived versions of the notes deleted; `clear()` also removes the sync cursors, so the next `sync` files every document again |
 | `check()` | lint the bundle; a list of problems (OKF conformance, index drift, broken links) |
 | `usage` | token totals so far (a property): `wiki.usage.to_dict()` |
 | `origin(key)` · `mark_removed(key)` | see below |
