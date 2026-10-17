@@ -425,7 +425,7 @@ class Wiki:
             return self.store.delete_folder(path)
 
     def clear(self) -> Deleted:
-        """Empty the wiki: every note, folder and raw copy. Cannot be undone."""
+        """Empty the wiki: every note, folder, raw copy and archived version, and the sync cursors. Cannot be undone."""
         with self.store.lock():
             return self.store.clear()
 
