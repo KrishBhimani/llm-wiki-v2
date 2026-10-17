@@ -267,3 +267,9 @@ def test_from_env_when_a_concurrency_override_is_given_then_it_wins_over_the_var
     config = WikiConfig.from_env(env_for(tmp_path, OKF_CONCURRENCY="4"), concurrency=2)
 
     assert config.concurrency == 2
+
+
+def test_paths_starting_with_a_tilde_are_in_the_home_folder(home: Path) -> None:
+    cfg = WikiConfig.from_env({"OKF_BUNDLE": "~/my-wiki", "OKF_USAGE_LOG": "~/logs/usage.jsonl", "OKF_PROMPTS_DIR": "~/prompts"})
+
+    assert (cfg.bundle, cfg.usage_log, cfg.prompts_dir) == (home / "my-wiki", home / "logs" / "usage.jsonl", home / "prompts")

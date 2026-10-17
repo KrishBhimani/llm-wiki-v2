@@ -233,6 +233,12 @@ class WikiConfig(BaseModel):
     classifier: ClassifierConfig = Field(default_factory=ClassifierConfig)
     crow: CrowConfig = Field(default_factory=CrowConfig)
 
+    @field_validator("bundle", "usage_log", "prompts_dir", mode="after")
+    @classmethod
+    def _expand_home(cls, path: Path | None) -> Path | None:
+        """`~/my-wiki` (typed on the settings page, or in .env) is the home folder's, not a folder named "~"."""
+        return path.expanduser() if path is not None else None
+
     @model_validator(mode="after")
     def _warn_source_chars(self) -> WikiConfig:
         if "source_chars" in self.model_fields_set:
