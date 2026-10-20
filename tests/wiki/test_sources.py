@@ -454,6 +454,23 @@ def test_a_finished_sync_has_no_stop_reason(par: Wiki) -> None:
     assert report.to_dict()["stopped"] is None
 
 
+def test_sync_after_the_wiki_is_emptied_files_every_document_again(par: Wiki, tmp_path: Path) -> None:
+    # ARRANGE
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    for name, text in topic_files("a.txt", "b.txt").items():
+        (docs / name).write_bytes(text)
+    assert sync(par, LocalFolderSource(docs)).created == 2
+    par.clear()
+
+    # ACT
+    report = sync(par, LocalFolderSource(docs))
+
+    # ASSERT
+    assert report.created == 2
+    assert len(par.tree().all_notes()) == 2
+
+
 # -- LocalFolderSource ------------------------------------------------------------------
 
 

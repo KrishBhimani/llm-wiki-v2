@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from llmw2.batch import Item
-from llmw2.bundle.store import write_atomic
+from llmw2.bundle.store import SYNC_DIR, write_atomic
 from llmw2.bundle.tree import slugify
 from llmw2.errors import ReplyInvalid
 from llmw2.sources.base import Change, SourceConnector
@@ -99,7 +99,7 @@ def _state_path(wiki: Wiki, connector: SourceConnector) -> Path:
     """
     digest = hashlib.sha256(f"{connector.name}\0{connector.account}".encode()).hexdigest()[:12]
     readable = (slugify(connector.name, fallback=""), slugify(connector.account, max_len=30, fallback=""), digest)
-    return wiki.cfg.bundle / ".llmw2" / "sync" / f"{'-'.join(p for p in readable if p)}.json"
+    return wiki.cfg.bundle / SYNC_DIR / f"{'-'.join(p for p in readable if p)}.json"
 
 
 def _load_cursor(path: Path) -> str | None:

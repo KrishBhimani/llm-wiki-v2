@@ -128,6 +128,8 @@ class UsageTracker:
         self._total = UsageReport()
         self._lock = threading.Lock()
         self._log_path = log_path
+        if log_path is not None:  # a log in a folder not made yet: made here, once
+            log_path.parent.mkdir(parents=True, exist_ok=True)
 
     def record(
         self,
