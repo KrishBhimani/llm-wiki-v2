@@ -104,6 +104,14 @@ def test_snapshot_is_a_copy(tracker: UsageTracker) -> None:
     assert set(fresh.by_model) == {"llm:gemini"}
 
 
+def test_a_log_path_in_a_folder_not_made_yet_gets_the_folder(tmp_path: Path) -> None:
+    log_path = tmp_path / "logs" / "usage.jsonl"
+
+    UsageTracker(log_path).record("llm", "m", 1, 1)
+
+    assert len(log_path.read_text(encoding="utf-8").splitlines()) == 1
+
+
 def test_log_path_gets_one_json_line_per_call(tmp_path: Path) -> None:
     log_path = tmp_path / "usage.jsonl"
     tracker = UsageTracker(log_path)

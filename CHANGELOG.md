@@ -9,8 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The Docker image builds again: `.dockerignore` lets in `LICENSE` and `LICENSES/`, which the package build needs; the README and `docker-compose.yml` no longer point to `/docs`, which the server turns off.
+- A note no longer vanishes when its summary or a field holds a `---` line (the frontmatter ended there, so the note failed to parse and left the tree and its index). A byte order mark no longer hides the frontmatter, and form feeds and U+2028 in a body stay as written. Text written by hand after a note's See-also list is kept when links change: it moves above the list, which stays one section. A note that is not UTF-8 is skipped with a warning and named by `check`, instead of stopping the whole wiki; an `index.md` or `log.md` saved as Latin-1 is read as such and written back as UTF-8.
+- A model failure in `relate`, which runs once the note is written, no longer fails the ingest: the note is filed and logged without See-also links, with a `relate` / `error` decision in the trace. Before, the note was left on disk with no log line, the sync stopped, and the next sync skipped it, so the links never came. `{"related": null}` reads as no links, and `"/a.md"` and `"a.md"` count as one link.
 - A merge no longer loses the incoming note when it does not fit what is left of the call after the existing note: it was cut to that room (to nothing for a note that filled it), the model merged what was left, and the note was logged as merged. Now no model is asked: the incoming body is added to the note as a section headed by its title, and the tags are joined.
+
+## [0.6.0] - 2026-10-19
+
+### Changed
+
+- CROW filing is one classifier Choice among every folder of the tree (and `None of these`), not a walk level by level. The per-level routing, with its beam and votes, decides only for an empty tree, on `None of these` or on a classifier error; `tau_route` now also decides whether the second folder's branch joins the match pool, and `votes` applies to the per-level routing only. When one request cannot hold every folder, the BM25 cut applies to this Choice too (decision `route_cut`). New decisions: `route` (the folder picked), `route_direct` (`None of these` or an error) and, with its own prompt, `classifier/route_direct`. Measured on four corpora, two writing models, an empty and a full wiki: 0.74 to 0.94 times the cost per document, 1.2 to 2.5 times the agreement with the real folders, retrieval on a par (about 96% for both), and 14% to 53% of the notes below the first level against 0% to 13%. One run per configuration, and retrieval is near its ceiling.
+- `Wiki.ingest_many` (and so `sync`) in CROW mode files in windows of 50 documents. Before a window is filed, when two or more of its documents are to be filed, an LLM call lays out the folders they need (`librarian/plan` for an empty wiki, `librarian/plan_more` for one that has folders: only new folders, never a rename, a move or a new description). A plan that fails is logged and the window goes on with the folders it has. The window and the plan's limits are constants, not settings. `Wiki.plan` can be called on its own and raises on a bad reply.
+- After a document filed alone (`ingest`, `ingest_file`, `/ingest`, `/upload`, a window with one document), CROW tries once to split its folder when it holds 12 notes directly, then at 24, 36 and so on: one LLM call (`librarian/split`) opens subfolders for the subjects at least two of the notes share and moves those notes there. The attempt is written in `log.md` as a "Split" line, also when it opens nothing, so a new `Wiki` does not try the same multiple again. A split never fails the ingest; its decision is `split`. Without a batch to plan, it takes the notes below the first level from 0% to 30%-44%, with agreement and retrieval within a few points of what they were. The limit is a constant, not a setting.
+- `audit_routes` (`llmwiki2 audit`, `POST /audit`) asks the same Choice among every folder as the filing, instead of the per-level routing, and proposes only a move to another branch: a folder below the note's own, or above it, is no longer a proposal. `--min-confidence` (0.7) is compared with the Choice's top probability, a scale that has not been recalibrated.
+- `taxonomy_health` (`llmwiki2 health`, `GET /taxonomy`) does not count folders laid out by a plan, a plan_more or a split as new subfolders: their "Created folder" lines end `, by plan`, `, by plan_more` or `, by split`.
+- CROW routing on a level with more subfolders than one classifier request holds (255 options for Jev, the `request_chars` of a classifier with a smaller context) offers the ones a BM25 ranking against the note puts first, as many as fit, instead of failing over to the LLM. A level that fits is asked as before. With Jev on a level of 500 and 1,000 folders the right folder is among those offered for 51 and 49 of 51 documents, and the folder taken is right for 38 and 37, as with about 250 folders all offered at once; asking every folder in groups and a final costs two to four times as much for the same result.
+
+### Fixed
+
+- The Docker image builds again: `.dockerignore` lets in `LICENSE` and `LICENSES/`, which the package build needs; the README and `docker-compose.yml` no longer point to `/docs`, which the server turns off.
+- Emptying the wiki removes the sync cursors too, so a `sync` afterwards files every document again instead of none. Deleting a note or a folder, or emptying the wiki, also removes the archived versions of the notes deleted (`Deleted.archived` lists them); the confirmation on the page says so.
+- Saving settings with a wiki folder that cannot be made (a file, or not writable) is refused with 422 and saves nothing; before, the bad folder was saved and the server failed on it, then and at every start. A missing key is refused before the folder is made. `~` in `OKF_BUNDLE`, `OKF_USAGE_LOG`, `OKF_PROMPTS_DIR` or the wiki folder on the settings page is the home folder, not a folder named `~`; a usage log's folder is made when it does not exist.
 
 ## [0.5.0] - 2026-10-16
 
@@ -176,6 +194,7 @@ The first release of the `llm-wiki-v2` repository, built on Google's Open Knowle
 - The package and module are named `llmw2` and the command `llmwiki2`.
 - Dropped the OKF fork (own document parser, no viewer, no reference agent) and the Bifrost gateway.
 
+[0.6.0]: https://github.com/crow-hq/llm-wiki-v2/releases/tag/v0.6.0
 [0.5.0]: https://github.com/crow-hq/llm-wiki-v2/releases/tag/v0.5.0
 [0.4.4]: https://github.com/crow-hq/llm-wiki-v2/releases/tag/v0.4.4
 [0.4.3]: https://github.com/crow-hq/llm-wiki-v2/releases/tag/v0.4.3

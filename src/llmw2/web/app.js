@@ -305,17 +305,17 @@ function confirmDelete({ title, text, action = "Delete", word = "" }) { // resol
 }
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 async function deleteNote(n) {
-  if (!await confirmDelete({ title: "Delete this note?", text: `"${n.title}" goes, with the links other notes have to it and the sources no other note cites. This cannot be undone.` })) return;
+  if (!await confirmDelete({ title: "Delete this note?", text: `"${n.title}" goes, with its archived versions, the links other notes have to it and the sources no other note cites. This cannot be undone.` })) return;
   await deleting(api("/note?path=" + encodeURIComponent(n.path), { method: "DELETE" }), current === n.path);
 }
 async function deleteFolder(f) {
   const notes = countNotes(f), subs = countFolders(f);
   const inside = subs ? `${plural(notes, "note")} in it and in ${plural(subs, "subfolder")}` : plural(notes, "note") + " in it";
-  if (!await confirmDelete({ title: `Delete ${f.path}?`, text: `The folder goes with ${inside}, the links other notes have to them and the sources no other note cites. This cannot be undone.` })) return;
+  if (!await confirmDelete({ title: `Delete ${f.path}?`, text: `The folder goes with ${inside}, their archived versions, the links other notes have to them and the sources no other note cites. This cannot be undone.` })) return;
   await deleting(api("/folder?path=" + encodeURIComponent(f.path), { method: "DELETE" }), current.startsWith(f.path.slice(1) + "/"));
 }
 async function emptyWiki() {
-  const text = `Every note (${countNotes(tree)}), every folder (${countFolders(tree)}) and every source goes, and the log starts again. This cannot be undone.`;
+  const text = `Every note (${countNotes(tree)}), every folder (${countFolders(tree)}), every source and every archived version go, and the log starts again. This cannot be undone.`;
   if (!await confirmDelete({ title: "Empty the whole wiki?", text, action: "Empty the wiki", word: "empty" })) return;
   await deleting(api("/wiki", { method: "DELETE" }), true);
 }

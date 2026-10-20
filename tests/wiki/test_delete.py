@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from llmw2 import Wiki
+from llmw2.bundle.store import ARCHIVE_DIR, SYNC_DIR
 from llmw2.bundle.tree import INDEX, LOG, RAW, drop_links, parse_index
 from llmw2.errors import InputError
 
@@ -81,7 +82,8 @@ def test_delete_note_when_other_notes_link_to_it_then_their_links_go_and_the_wik
     assert "Read the price list and [the web](https://example.com/finance/x.md)." in body(classic_wiki, filed.plan)
     assert "budget.md" in body(classic_wiki, filed.plan)  # the other links stay
     assert deleted.to_dict() == {
-        "notes": [filed.price_list], "folders": [], "sources": [filed.raw_prices], "unlinked": [filed.plan, filed.budget]
+        "notes": [filed.price_list], "folders": [], "sources": [filed.raw_prices], "archived": [],
+        "unlinked": [filed.plan, filed.budget],
     }
     assert exists(classic_wiki, filed.raw_plan)  # the plan still cites it
     assert classic_wiki.check() == []
@@ -120,6 +122,37 @@ def test_clear_when_the_wiki_is_full_then_it_is_empty_valid_and_other_files_stay
     assert "Emptied the wiki" in log and "Created" not in log
     assert photo.exists()
     assert classic_wiki.check() == []
+
+
+def test_delete_note_when_it_was_revised_then_its_archived_versions_go_and_others_stay(classic_wiki: Wiki, filed: Filed) -> None:
+    # ARRANGE
+    store = classic_wiki.store
+    root = store.load()
+    mine = store.archive_note(next(n for n in root.all_notes() if n.rel == filed.price_list))
+    other = store.archive_note(next(n for n in root.all_notes() if n.rel == filed.budget))
+
+    # ACT
+    deleted = classic_wiki.delete_note(filed.price_list)
+
+    # ASSERT
+    assert deleted.archived == [mine]
+    assert not exists(classic_wiki, mine) and exists(classic_wiki, other)
+
+
+def test_clear_takes_the_archive_and_the_sync_cursors_with_it(classic_wiki: Wiki, filed: Filed) -> None:
+    # ARRANGE
+    store = classic_wiki.store
+    archived = store.archive_note(next(n for n in store.load().all_notes() if n.rel == filed.plan))
+    cursor = classic_wiki.cfg.bundle / SYNC_DIR / "local-docs.json"
+    cursor.parent.mkdir(parents=True)
+    cursor.write_text('{"cursor": "{}"}', encoding="utf-8")
+
+    # ACT
+    deleted = classic_wiki.clear()
+
+    # ASSERT
+    assert deleted.archived == [archived]
+    assert not (classic_wiki.cfg.bundle / ARCHIVE_DIR).exists() and not cursor.exists()
 
 
 @pytest.mark.parametrize(

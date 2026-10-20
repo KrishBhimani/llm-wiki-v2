@@ -84,6 +84,29 @@ def test_invalid_settings_are_a_422_and_change_nothing(local: TestClient, rebuil
     assert rebuilt == []
 
 
+def test_saving_a_wiki_folder_that_cannot_be_made_is_a_422_and_saves_nothing(local: TestClient, home: Path, tmp_path: Path) -> None:
+    taken = tmp_path / "a-file"
+    taken.write_text("not a folder", encoding="utf-8")
+
+    response = local.post("/settings", json={"provider": "ollama", "mode": "classic", "bundle": str(taken)})
+
+    assert response.status_code == 422
+    assert "cannot be used" in response.json()["detail"]
+    assert not (home / ".config" / "llm-wiki" / "config.json").exists()
+    assert local.get("/tree").status_code == 200  # the wiki it had still answers
+
+
+def test_saving_without_a_needed_key_makes_no_wiki_folder(local: TestClient, rebuilt: list[WikiConfig], home: Path, tmp_path: Path) -> None:
+    new = tmp_path / "new-wiki"
+
+    response = local.post("/settings", json={"provider": "openrouter", "mode": "classic", "bundle": str(new)})
+
+    assert response.status_code == 422
+    assert not new.exists()
+    assert rebuilt == []
+    assert not (home / ".config" / "llm-wiki" / "config.json").exists()
+
+
 def test_the_settings_test_asks_the_model_without_saving(local: TestClient, llm: FakeLLM, home: Path) -> None:
     llm.add("settings/probe", "OK")
 

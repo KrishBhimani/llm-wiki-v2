@@ -61,12 +61,16 @@ from llmw2.errors import InputError
 log = logging.getLogger(__name__)
 
 ARCHIVE_DIR = ".archive"  # superseded versions of notes; hidden from the tree
+SYNC_DIR = ".llmw2/sync"  # the cursors of `sync`, one file per connector and account
 REPLACE_ATTEMPTS = 6  # about 0.3 s in all: long enough for a reader to close the file it was reading
 
 
 def body_hash(body: str) -> str:
-    """The hash of a note's main body: it tells whether code alone wrote it."""
-    return "sha256:" + hashlib.sha256(body.strip().encode("utf-8")).hexdigest()
+    """The hash of a note's main body: it tells whether code alone wrote it.
+
+    Line breaks count as "\n" whatever they were ("\r\n" is read back as "\n"), so a reload does not change the hash.
+    """
+    return "sha256:" + hashlib.sha256("\n".join(body.strip().splitlines()).encode("utf-8")).hexdigest()
 
 
 def now_iso() -> str:
@@ -87,6 +91,7 @@ class Deleted:
     notes: list[str] = field(default_factory=list)  # bundle paths of the notes deleted
     folders: list[str] = field(default_factory=list)  # labels of the folders deleted, subfolders included
     sources: list[str] = field(default_factory=list)  # raw copies that no remaining note cites ("/raw/…")
+    archived: list[str] = field(default_factory=list)  # archived versions of the notes deleted ("/.archive/…")
     unlinked: list[str] = field(default_factory=list)  # remaining notes that lost a link to what went
 
     def to_dict(self) -> dict[str, Any]:
@@ -151,7 +156,7 @@ class WikiStore:
         folder = Folder(path, rel, description, parent=parent)
         descriptions: dict[str, str] = {}
         if (path / INDEX).exists():
-            for _, link, text in parse_index((path / INDEX).read_text(encoding="utf-8")):
+            for _, link, text in parse_index(read_utf8_or_latin1(path / INDEX)):
                 if name := subfolder_of(link):
                     descriptions[name] = text
         for child in sorted(path.iterdir()):
@@ -162,7 +167,7 @@ class WikiStore:
                 folder.subfolders.append(self._load_folder(child, child_rel, descriptions.get(child.name, ""), folder))
             elif child.suffix == ".md" and child.name not in (INDEX, LOG):
                 try:
-                    doc = OKFDocument.parse(child.read_text(encoding="utf-8"))
+                    doc = OKFDocument.read(child)
                 except OKFDocumentError as e:
                     log.warning("skipping %s: %s", child_rel, e)
                     continue
@@ -177,15 +182,15 @@ class WikiStore:
             raise InputError(f"not a wiki document: {rel}")
         if not path.is_file():
             raise FileNotFoundError(rel)
-        doc = OKFDocument.parse(path.read_text(encoding="utf-8"))
+        doc = OKFDocument.read(path)
         return Note(path, path.relative_to(root).as_posix(), doc.frontmatter, doc.body)
 
     # -- writing --------------------------------------------------------------
 
-    def create_folder(self, parent: Folder, name: str, description: str) -> tuple[Folder, bool]:
+    def create_folder(self, parent: Folder, name: str, description: str, mark: str = "") -> tuple[Folder, bool]:
         """Create `parent/name` and list it in the parent's index; (folder, created).
 
-        A sibling with the same slug is reused instead of duplicated.
+        A sibling with the same slug is reused instead of duplicated. `mark` ends the log line (", by plan").
         """
         name = slugify(name, max_len=40, fallback="topics")
         if parent.is_root and name == RAW:
@@ -198,7 +203,7 @@ class WikiStore:
         parent.subfolders.append(folder)
         self.write_index(folder)
         self.write_index(parent)
-        self.append_log("Created folder", folder.description, f"{rel}/{INDEX}", folder.label)
+        self.append_log("Created folder", folder.description + mark, f"{rel}/{INDEX}", folder.label)
         return folder, True
 
     def write_note(
@@ -380,7 +385,7 @@ class WikiStore:
     def append_log(self, verb: str, text: str, link: str | None = None, link_title: str | None = None) -> None:
         """Newest first under a `## YYYY-MM-DD` heading (OKF §9)."""
         path = self.root / LOG
-        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else ["# Wiki log"]
+        lines = read_utf8_or_latin1(path).splitlines() if path.exists() else ["# Wiki log"]
         entry = f"* **{verb}**: " + " - ".join(p for p in (f"[{link_title or link}]({link})" if link else "", text) if p)
         today = f"## {datetime.now(UTC).date().isoformat()}"
         first = next((i for i, line in enumerate(lines) if line.startswith("## ")), None)
@@ -444,14 +449,20 @@ class WikiStore:
         if note.path.exists():
             self._save(note)
 
-    def _rehome_archive(self, old: str, new: str) -> None:
-        """Archived copies of the note at `old` now say they come from `new`."""
+    def _archived(self) -> Iterator[tuple[Path, OKFDocument, str]]:
+        """Every archived copy that can be read: (path, document, the bundle path it was archived from, "" if none)."""
         for path in sorted((self.root / ARCHIVE_DIR).rglob("*.md")):
             try:
-                doc = OKFDocument.parse(path.read_text(encoding="utf-8"))
+                doc = OKFDocument.read(path)
             except OKFDocumentError:
                 continue
-            if doc.frontmatter.get("archived_from") == f"/{old}":
+            was = doc.frontmatter.get("archived_from")
+            yield path, doc, was.lstrip("/") if isinstance(was, str) else ""
+
+    def _rehome_archive(self, old: str, new: str) -> None:
+        """Archived copies of the note at `old` now say they come from `new`."""
+        for path, doc, was in self._archived():
+            if was == old:
                 doc.frontmatter["archived_from"] = f"/{new}"
                 write_atomic(path, doc.serialize())
 
@@ -495,13 +506,20 @@ class WikiStore:
         return deleted
 
     def clear(self) -> Deleted:
-        """Empty the wiki: every note, folder and raw copy go, and the log starts again. Other files stay."""
+        """Empty the wiki: every note, folder (with all it holds), raw copy and archived version go, and the log starts
+        again. The sync cursors go too, so the next `sync` files every document again. Other files of the top level stay.
+        """
         root = self.load()
         deleted = self._delete(root, root.all_notes(), list(root.subfolders))
         for raw in sorted((self.root / RAW).glob("*.md")):
             raw.unlink()
             deleted.sources.append(f"/{RAW}/{raw.name}")
         deleted.sources = list(dict.fromkeys(deleted.sources))
+        archive = self.root / ARCHIVE_DIR
+        deleted.archived += [f"/{p.relative_to(self.root).as_posix()}" for p in sorted(archive.rglob("*.md"))]
+        deleted.archived = list(dict.fromkeys(deleted.archived))
+        shutil.rmtree(archive, ignore_errors=True)
+        shutil.rmtree(self.root / SYNC_DIR, ignore_errors=True)
         write_atomic(self.root / LOG, "# Wiki log\n")
         self.append_log("Emptied the wiki", f"{len(deleted.notes)} notes and {len(deleted.folders)} folders deleted")
         return deleted
@@ -536,6 +554,10 @@ class WikiStore:
         for folder in dict.fromkeys(touched):
             if folder.path.is_dir():
                 self.write_index(folder)
+        for path, _, was in self._archived():  # the archived versions of what went
+            if was and gone(was):
+                path.unlink()
+                deleted.archived.append(f"/{path.relative_to(self.root).as_posix()}")
         cited = {r for n in kept for r in _raw_sources(n)}
         for resource in dict.fromkeys(r for n in notes for r in _raw_sources(n)):
             path = (self.root / resource.lstrip("/")).resolve()
@@ -562,6 +584,19 @@ def _raw_sources(note: Note) -> list[str]:
         for s in (sources if isinstance(sources, list) else [])
         if isinstance(s, dict) and str(s.get("resource", "")).startswith(f"/{RAW}/")
     ]
+
+
+def read_utf8_or_latin1(path: Path) -> str:
+    """An index.md or log.md as text: UTF-8, or Latin-1 when an editor saved it so.
+
+    Latin-1 reads every byte and loses none, so the next write turns the file into UTF-8 with its characters ("Café"
+    stays "Café"); replacing the bad bytes would write "Caf\ufffd" back for good.
+    """
+    data = path.read_bytes()
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("latin-1")
 
 
 def write_atomic(path: Path, text: str) -> None:
