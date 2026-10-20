@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A note no longer vanishes when its summary or a field holds a `---` line (the frontmatter ended there, so the note failed to parse and left the tree and its index). A byte order mark no longer hides the frontmatter, and form feeds and U+2028 in a body stay as written. Text written by hand after a note's See-also list is kept when links change: it moves above the list, which stays one section. A note that is not UTF-8 is skipped with a warning and named by `check`, instead of stopping the whole wiki; an `index.md` or `log.md` saved as Latin-1 is read as such and written back as UTF-8.
+- A model failure in `relate`, which runs once the note is written, no longer fails the ingest: the note is filed and logged without See-also links, with a `relate` / `error` decision in the trace. Before, the note was left on disk with no log line, the sync stopped, and the next sync skipped it, so the links never came. `{"related": null}` reads as no links, and `"/a.md"` and `"a.md"` count as one link.
+
 ## [0.6.0] - 2026-10-19
 
 ### Changed
@@ -23,7 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Docker image builds again: `.dockerignore` lets in `LICENSE` and `LICENSES/`, which the package build needs; the README and `docker-compose.yml` no longer point to `/docs`, which the server turns off.
 - Emptying the wiki removes the sync cursors too, so a `sync` afterwards files every document again instead of none. Deleting a note or a folder, or emptying the wiki, also removes the archived versions of the notes deleted (`Deleted.archived` lists them); the confirmation on the page says so.
 - Saving settings with a wiki folder that cannot be made (a file, or not writable) is refused with 422 and saves nothing; before, the bad folder was saved and the server failed on it, then and at every start. A missing key is refused before the folder is made. `~` in `OKF_BUNDLE`, `OKF_USAGE_LOG`, `OKF_PROMPTS_DIR` or the wiki folder on the settings page is the home folder, not a folder named `~`; a usage log's folder is made when it does not exist.
-- A note no longer vanishes when its summary or a field holds a `---` line (the frontmatter ended there, so the note failed to parse and left the tree and its index). A byte order mark no longer hides the frontmatter, and form feeds and U+2028 in a body stay as written. Text written by hand after a note's See-also list is kept when links change: it moves above the list, which stays one section. A note that is not UTF-8 is skipped with a warning and named by `check`, instead of stopping the whole wiki; an `index.md` or `log.md` saved as Latin-1 is read as such and written back as UTF-8.
 
 ## [0.5.0] - 2026-10-16
 
